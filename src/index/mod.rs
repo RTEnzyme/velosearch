@@ -1,3 +1,3 @@
-mod handler;
+pub mod handler;
 
 pub use handler::BaseHandler;

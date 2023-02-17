@@ -4,6 +4,12 @@ use datafusion::{arrow::{datatypes::{DataType, Field, Schema}, array::{ArrayRef,
 
 use crate::{utils::{parse_wiki_file, json::WikiItem, FastErr}};
 
+pub trait HandlerT {
+   fn to_recordbatch(&mut self) -> Result<RecordBatch, FastErr>;
+
+   fn get_words(&self, num: u32) -> Vec<String>; 
+}
+
 
 pub struct BaseHandler {
     ids: Vec<u32>,
@@ -53,8 +59,10 @@ impl BaseHandler {
             (k.clone(), v)
         }).collect()
     }
+}
 
-    pub fn to_recordbatch(&mut self) -> Result<RecordBatch, FastErr> {
+impl HandlerT for BaseHandler {
+    fn to_recordbatch(&mut self) -> Result<RecordBatch, FastErr> {
 
         let nums = self.ids[self.ids.len()-1] - self.ids[0] + 1;
         let res = self.to_hashmap();
@@ -76,6 +84,10 @@ impl BaseHandler {
             schema,
             column_list
         )?)
+    }
+
+    fn get_words(&self, num: u32) -> Vec<String> {
+        self.words.iter().take(num as usize).cloned().collect()
     }
 }
 
