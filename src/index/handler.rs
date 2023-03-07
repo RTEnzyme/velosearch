@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, path::PathBuf, str::FromStr, sync::Arc};
 
-use datafusion::{arrow::{datatypes::{DataType, Field, Schema}, array::{ArrayRef, UInt32Array, UInt8Array}, record_batch::RecordBatch}, from_slice::FromSlice};
+use datafusion::{arrow::{datatypes::{DataType, Field, Schema}, array::{ArrayRef, UInt32Array, UInt8Array}, record_batch::RecordBatch}};
 
 use crate::{utils::{parse_wiki_file, json::WikiItem, FastErr}};
 
@@ -37,7 +37,7 @@ impl BaseHandler {
         Self { ids, words }
     }
 
-    fn to_hashmap(&mut self) -> HashMap<String, Vec<u8>> {
+    fn to_hashmap(&mut self) -> HashMap<String, Vec<Option<u8>>> {
         let mut res = HashMap::new();
         let start = self.ids[0];
         let end = self.ids[self.ids.len()-1];
@@ -51,9 +51,9 @@ impl BaseHandler {
             let v = (start..=end).into_iter()
             .map(|i| {
                 if set.contains(&i) {
-                    1 as u8
+                    Some(1 as u8)
                 } else {
-                    0 as u8
+                    None
                 }
             }).collect();
             (k.clone(), v)
@@ -66,10 +66,12 @@ impl HandlerT for BaseHandler {
 
         let nums = self.ids[self.ids.len()-1] - self.ids[0] + 1;
         let res = self.to_hashmap();
+        // let res: HashMap<String, Vec<Option<u8>>> = self.to_hashmap().into_iter().take(100).collect();
+        // self.words = res.keys().cloned().collect();
         let mut field_list = Vec::new();
         field_list.push(Field::new("__id__", DataType::UInt32, false));
         res.keys().for_each(|k| {
-            field_list.push(Field::new(format!("{k}"), DataType::UInt8, false));
+            field_list.push(Field::new(format!("{k}"), DataType::UInt8, true));
         });
 
         let schema = Arc::new(Schema::new(field_list));
@@ -77,7 +79,7 @@ impl HandlerT for BaseHandler {
         let mut column_list: Vec<ArrayRef> = Vec::new();
         column_list.push(Arc::new(UInt32Array::from_iter((0..(nums as u32)).into_iter())));
         res.values().for_each(|v| {
-            column_list.push(Arc::new(UInt8Array::from_slice(v)))
+            column_list.push(Arc::new(v.into_iter().collect::<UInt8Array>()))
         });
 
         Ok(RecordBatch::try_new(
@@ -90,6 +92,7 @@ impl HandlerT for BaseHandler {
         self.words.iter().take(num as usize).cloned().collect()
     }
 }
+
 
 #[cfg(test)]
 mod test {

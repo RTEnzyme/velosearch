@@ -1,10 +1,10 @@
-use std::time::Instant;
 
 use clap::Parser;
 use datafusion::prelude::*;
 use fastfull_search::index::BaseHandler;
 use fastfull_search::{Result, FastArgs, Handler};
 use fastfull_search::index::handler::HandlerT;
+use tokio::time::Instant;
 use rand::prelude::*;
 
 #[tokio::main]
@@ -21,22 +21,29 @@ async fn main() -> Result<()> {
     // declare a new context.
     let ctx = SessionContext::new();
 
-    ctx.register_batch("table", batch)?;
-    let time = Instant::now();
-    let df = ctx.table("table").await?.cache().await?;
-    println!("cache table: {}", time.elapsed().as_millis());
+    ctx.register_batch("t", batch)?;
+    let df = ctx.table("t").await?.cache().await?;
+    
+
     let mut test_keys: Vec<String> = handler.get_words(100);
     test_keys.shuffle(&mut rand::thread_rng());
     let test_keys = test_keys[..2].to_vec();
     let i = &test_keys[0];
     let j = &test_keys[1];
     let time = Instant::now();
-    df.select_columns(&["__id__", i, j])?
-        .filter(col(i).eq(lit(1))
-        .and(col(j).eq(lit(1))))?
+    df.clone().explain(false, true)?.show().await?;
+    println!("bare select time: {}", time.elapsed().as_millis());
+    let time = Instant::now();
+    df
+        .filter(col(i).is_not_null()
+        .and(col(j).is_not_null()))?
+        .select_columns(&["__id__", i, j])? 
+        .explain(false, true)?
+        // .collect().await?
         .show().await?;
-    println!("query time: {}", time.elapsed().as_millis());
+    // println!("{}", format!("select {i}, {j} from t where {i} is not null and {j} is not null"));
+    // ctx.sql(&format!("select `{i}`, `{j}` from t where `{i}` is not null and `{j}` is not null")).await?;
+    let query_time = time.elapsed().as_millis();
+    println!("query time: {}", query_time);
     Ok(())
 }
-
-// fn raw_process(path: &str) ->
