@@ -1,13 +1,18 @@
-use std::{collections::{HashMap, HashSet}, path::PathBuf, str::FromStr, sync::Arc};
+use std::{path::PathBuf, str::FromStr, sync::Arc};
+use async_trait::async_trait;
+use datafusion::{arrow::{datatypes::{DataType, Field, Schema}, array::{ArrayRef, UInt32Array, UInt8Array}, record_batch::RecordBatch}, from_slice::FromSlice};
+use tokio::time::Instant;
+use rand::prelude::*;
+use datafusion::prelude::*;
+use tracing::{span, info, Level};
 
-use datafusion::{arrow::{datatypes::{DataType, Field, Schema}, array::{ArrayRef, UInt32Array, UInt8Array}, record_batch::RecordBatch}};
+use crate::{utils::{parse_wiki_file, json::WikiItem, Result, to_hashmap}};
 
-use crate::{utils::{parse_wiki_file, json::WikiItem, FastErr}};
-
+#[async_trait]
 pub trait HandlerT {
-   fn to_recordbatch(&mut self) -> Result<RecordBatch, FastErr>;
-
    fn get_words(&self, num: u32) -> Vec<String>; 
+
+   async fn execute(&mut self) -> Result<()>;
 }
 
 
@@ -37,35 +42,11 @@ impl BaseHandler {
         Self { ids, words }
     }
 
-    fn to_hashmap(&mut self) -> HashMap<String, Vec<Option<u8>>> {
-        let mut res = HashMap::new();
-        let start = self.ids[0];
-        let end = self.ids[self.ids.len()-1];
-        self.ids.iter().zip(self.words.iter())
-        .for_each(|(id, w)| {
-            res.entry(w.clone()).or_insert(Vec::new()).push(*id);
-        });
-        res.iter_mut()
-        .map(|(k, v)| {
-            let set: HashSet<u32> = HashSet::from_iter(v.iter().cloned());
-            let v = (start..=end).into_iter()
-            .map(|i| {
-                if set.contains(&i) {
-                    Some(1 as u8)
-                } else {
-                    None
-                }
-            }).collect();
-            (k.clone(), v)
-        }).collect()
-    }
-}
-
-impl HandlerT for BaseHandler {
-    fn to_recordbatch(&mut self) -> Result<RecordBatch, FastErr> {
+    fn to_recordbatch(&mut self) -> Result<RecordBatch> {
+        let _span = span!(Level::INFO, "BaseHandler to_recordbatch").entered();
 
         let nums = self.ids[self.ids.len()-1] - self.ids[0] + 1;
-        let res = self.to_hashmap();
+        let res = to_hashmap(&self.ids, &self.words);
         // let res: HashMap<String, Vec<Option<u8>>> = self.to_hashmap().into_iter().take(100).collect();
         // self.words = res.keys().cloned().collect();
         let mut field_list = Vec::new();
@@ -75,11 +56,11 @@ impl HandlerT for BaseHandler {
         });
 
         let schema = Arc::new(Schema::new(field_list));
-        println!("The term dict length: {:}", res.len());
+        info!("The term dict length: {:}", res.len());
         let mut column_list: Vec<ArrayRef> = Vec::new();
         column_list.push(Arc::new(UInt32Array::from_iter((0..(nums as u32)).into_iter())));
         res.values().for_each(|v| {
-            column_list.push(Arc::new(v.into_iter().collect::<UInt8Array>()))
+            column_list.push(Arc::new(UInt8Array::from_slice(v.as_slice())))
         });
 
         Ok(RecordBatch::try_new(
@@ -87,9 +68,48 @@ impl HandlerT for BaseHandler {
             column_list
         )?)
     }
+    
+}
+
+#[async_trait]
+impl HandlerT for BaseHandler {
+
 
     fn get_words(&self, num: u32) -> Vec<String> {
         self.words.iter().take(num as usize).cloned().collect()
+    }
+
+    async fn execute(&mut self) -> Result<()> {
+
+        let batch = self.to_recordbatch()?;
+        // declare a new context.
+        let ctx = SessionContext::new();
+
+        ctx.register_batch("t", batch)?;
+        let df = ctx.table("t").await?.cache().await?;
+        
+
+        let mut test_keys: Vec<String> = self.get_words(100);
+        test_keys.shuffle(&mut rand::thread_rng());
+        let test_keys = test_keys[..2].to_vec();
+        let i = &test_keys[0];
+        let j = &test_keys[1];
+        let time = Instant::now();
+        df.clone().explain(false, true)?.show().await?;
+        info!("bare select time: {}", time.elapsed().as_millis());
+        let time = Instant::now();
+        df
+            .filter(col(i).is_not_null()
+            .and(col(j).is_not_null()))?
+            .select_columns(&["__id__", i, j])? 
+            .explain(false, true)?
+            // .collect().await?
+            .show().await?;
+        // println!("{}", format!("select {i}, {j} from t where {i} is not null and {j} is not null"));
+        // ctx.sql(&format!("select `{i}`, `{j}` from t where `{i}` is not null and `{j}` is not null")).await?;
+        let query_time = time.elapsed().as_millis();
+        info!("query time: {}", query_time);
+        Ok(())
     }
 }
 

@@ -1,6 +1,5 @@
 use datafusion::{arrow::error::ArrowError, error::DataFusionError};
 use failure::Fail;
-
 pub type Result<T> = std::result::Result<T, FastErr>;
 
 #[derive(Fail, Debug)]
@@ -13,7 +12,9 @@ pub enum FastErr {
     #[fail(display = "Arrow Err: {}", _0)]
     ArrowErr(#[cause] ArrowError),
     #[fail(display = "DataFusionErr: {}", _0)]
-    DataFusionErr(#[cause] DataFusionError)
+    DataFusionErr(#[cause] DataFusionError),
+    #[fail(display = "Unimplement: {}", _0)]
+    UnimplementErr(String),
 }
 
 impl From<core::convert::Infallible> for FastErr {
