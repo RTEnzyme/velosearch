@@ -1,7 +1,7 @@
 
 use clap::Parser;
 
-use fastfull_search::index::{BaseHandler, SplitHandler};
+use fastfull_search::index::{BaseHandler, SplitHandler, SplitO1};
 use fastfull_search::{Result, FastArgs, Handler};
 use fastfull_search::index::handler::HandlerT;
 use tracing::{info, Level};
@@ -18,7 +18,8 @@ async fn main() -> Result<()> {
         Handler::Base => {
             Box::new(BaseHandler::new(&args.path.unwrap()))
         },
-        Handler::SplitBase => Box::new(SplitHandler::new(&args.path.unwrap()))
+        Handler::SplitBase => Box::new(SplitHandler::new(&args.path.unwrap())),
+        Handler::SplitO1 => Box::new(SplitO1::new(&args.path.unwrap()))
     };
     handler.execute().await?;
     Ok(())

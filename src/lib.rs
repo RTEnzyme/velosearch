@@ -19,5 +19,6 @@ pub struct FastArgs {
 #[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, ValueEnum, Debug)]
 pub enum Handler {
    Base,
-   SplitBase
+   SplitBase,
+   SplitO1
 }

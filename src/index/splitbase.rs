@@ -108,3 +108,90 @@ impl HandlerT for SplitHandler {
         Ok(())
     }
 }
+
+pub struct SplitO1 {
+    base: SplitHandler,
+    encode: HashMap<String, u32>,
+    idx: u32
+}
+
+impl SplitO1 {
+    pub fn new(path: &str) -> Self {
+        Self { 
+            base: SplitHandler::new(path),
+            encode: HashMap::new(),
+            idx: 0
+        }
+    }
+
+    // use encode u32 inplace variant String
+    fn recode(&mut self, batches: Vec<RecordBatch>) -> Result<Vec<RecordBatch>> {
+        let mut new_batch = Vec::with_capacity(batches.len());
+        for batch in batches {
+            let schema = batch.schema();
+            let fields = schema.all_fields();
+            let fields = fields.into_iter().skip(1)
+            .map(|field| {
+                self.encode.insert(field.name().to_string(), self.idx);
+                self.idx += 1;
+                Field::new(format!("{}", self.idx-1), DataType::UInt8, false)
+            });
+            let mut fields_id = vec![Field::new("__id__", DataType::UInt32, false)];
+            fields_id.extend(fields);
+            new_batch.push(RecordBatch::try_new(Arc::new(Schema::new(fields_id)), batch.columns().to_vec())?);
+        }
+        Ok(new_batch)
+    }
+}
+
+#[async_trait]
+impl HandlerT for SplitO1 {
+    fn get_words(&self, num: u32) -> Vec<String> {
+        self.base.get_words(num)
+    }
+
+    async fn execute(&mut self) ->Result<()> {
+        let batches = self.base.to_recordbatch()?;
+        let batches = self.recode(batches)?;
+        // declare a new context.
+        let ctx = SessionContext::new();
+
+        batches.into_iter().enumerate().for_each(|(i, b)| {
+            ctx.register_batch(format!("_table_{i}").as_str(), b).unwrap();
+        });
+        
+        
+        let mut test_keys: Vec<String> = self.get_words(100);
+        test_keys.shuffle(&mut rand::thread_rng());
+        let time = Instant::now();
+        let mut handlers = Vec::with_capacity(50);
+        for x in 0..50 {
+            let test_keys = test_keys[2*x..2*x+2].to_vec();
+            let ctx = ctx.clone();
+            let i = &test_keys[0];
+            let j = &test_keys[1];
+            let ri = self.encode[i];
+            let rj = self.encode[j];
+            let ip = self.base.partition_map[i];
+            let jp = self.base.partition_map[j];
+                
+            handlers.push(tokio::spawn(async move {
+                
+                let i_df = ctx.table(format!("_table_{ip}").as_str()).await.unwrap().select_columns(&[format!("{ri}").as_str(), "__id__"]).unwrap();
+                let j_df = ctx.table(format!("_table_{jp}").as_str()).await.unwrap().select_columns(&[format!("{rj}").as_str(), "__id__"]).unwrap();
+            
+                let query = i_df.join_on(j_df, JoinType::Inner, [col(ri.to_string()).eq(lit(1)), col(rj.to_string()).eq(lit(1)), col(format!("_table_{ip}.__id__")).eq(col(format!("_table_{jp}.__id__")))]).unwrap();
+                
+                query.collect().await.unwrap();
+                println!("{} complete!", x);
+            }));
+        }
+        // ctx.sql(sql)s
+        for handle in handlers {
+            handle.await.unwrap();
+        }
+        let query_time = time.elapsed().as_micros() / 50;
+        info!("o1 query time: {} micors seconds", query_time);
+        Ok(())    
+    }
+}
