@@ -15,6 +15,20 @@ pub enum FastErr {
     DataFusionErr(#[cause] DataFusionError),
     #[fail(display = "Unimplement: {}", _0)]
     UnimplementErr(String),
+    #[fail(display = "SerdeErr: {}", _0)]
+    SerdeErr(serde_json::Error),
+}
+
+impl From<serde_json::Error> for FastErr {
+    fn from(value: serde_json::Error) -> Self {
+        FastErr::SerdeErr(value)
+    }
+}
+
+impl From<std::io::Error> for FastErr {
+    fn from(value: std::io::Error) -> Self {
+        FastErr::IoError(value)
+    }
 }
 
 impl From<core::convert::Infallible> for FastErr {

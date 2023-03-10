@@ -17,6 +17,7 @@ pub trait HandlerT {
 
 
 pub struct BaseHandler {
+    doc_len: u32,
     ids: Vec<u32>,
     pub words: Vec<String>
 }
@@ -24,6 +25,7 @@ pub struct BaseHandler {
 impl BaseHandler {
     pub fn new(path: &str) -> Self {
         let items = parse_wiki_file(&PathBuf::from_str(path).unwrap()).unwrap();
+        let doc_len = items.len() as u32;
         let mut ids: Vec<u32> = Vec::new();
         let mut words: Vec<String> = Vec::new();
 
@@ -39,14 +41,14 @@ impl BaseHandler {
             })
         });
 
-        Self { ids, words }
+        Self { doc_len, ids, words }
     }
 
     fn to_recordbatch(&mut self) -> Result<RecordBatch> {
         let _span = span!(Level::INFO, "BaseHandler to_recordbatch").entered();
 
         let nums = self.ids[self.ids.len()-1] - self.ids[0] + 1;
-        let res = to_hashmap(&self.ids, &self.words);
+        let res = to_hashmap(&self.ids, &self.words, self.doc_len);
         // let res: HashMap<String, Vec<Option<u8>>> = self.to_hashmap().into_iter().take(100).collect();
         // self.words = res.keys().cloned().collect();
         let mut field_list = Vec::new();

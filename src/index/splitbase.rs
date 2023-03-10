@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::fs::File;
 use std::sync::Arc;
-use std::{path::PathBuf, str::FromStr};
+use std::{str::FromStr};
+use std::io::Write;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{ArrayRef, UInt32Array, UInt8Array};
@@ -14,10 +16,12 @@ use tokio::time::Instant;
 use tracing::{span, Level, info};
 
 use super::HandlerT;
-use crate::utils::{Result, json::WikiItem, parse_wiki_file, to_hashmap};
+use crate::utils::json::parse_wiki_dir;
+use crate::utils::{Result, json::WikiItem, to_hashmap};
 
 
 pub struct SplitHandler {
+    doc_len: u32,
     ids: Vec<u32>,
     words: Vec<String>,
     partition_map: HashMap<String, usize>
@@ -25,9 +29,10 @@ pub struct SplitHandler {
 
 impl SplitHandler {
     pub fn new(path: &str) -> Self {
-        let items = parse_wiki_file(&PathBuf::from_str(path).unwrap()).unwrap();
+        let items = parse_wiki_dir(path).unwrap();
         let mut ids: Vec<u32> = Vec::new();
         let mut words: Vec<String> = Vec::new();
+        let doc_len = items.len() as u32;
 
         items.into_iter()
         .for_each(|e| {
@@ -40,14 +45,14 @@ impl SplitHandler {
                 words.push(e.to_string());
             })
         });
-        Self { ids, words, partition_map: HashMap::new() }
+        Self { doc_len, ids, words, partition_map: HashMap::new() }
     }
 
     fn to_recordbatch(&mut self) -> Result<Vec<RecordBatch>> {
         let _span = span!(Level::INFO, "BaseHandler to_recordbatch").entered();
 
-        let nums = self.ids[self.ids.len()-1] - self.ids[0] + 1;
-        let res = to_hashmap(&self.ids, &self.words);
+        let nums = self.doc_len as usize;
+        let res = to_hashmap(&self.ids, &self.words, self.doc_len);
         let column_nums = res.len();
         let iter_nums = (column_nums + 99) / 100 as usize;
         let mut column_iter = res.into_iter();
@@ -176,11 +181,18 @@ impl HandlerT for SplitO1 {
             let jp = self.base.partition_map[j];
                 
             handlers.push(tokio::spawn(async move {
-                
-                let i_df = ctx.table(format!("_table_{ip}").as_str()).await.unwrap().select_columns(&[format!("{ri}").as_str(), "__id__"]).unwrap();
-                let j_df = ctx.table(format!("_table_{jp}").as_str()).await.unwrap().select_columns(&[format!("{rj}").as_str(), "__id__"]).unwrap();
-            
-                let query = i_df.join_on(j_df, JoinType::Inner, [col(ri.to_string()).eq(lit(1)), col(rj.to_string()).eq(lit(1)), col(format!("_table_{ip}.__id__")).eq(col(format!("_table_{jp}.__id__")))]).unwrap();
+                if ri == rj {
+                    return;
+                }
+                let query = if ip != jp {
+                    let i_df = ctx.table(format!("_table_{ip}").as_str()).await.unwrap().select_columns(&[format!("{ri}").as_str(), "__id__"]).unwrap();
+                    let j_df = ctx.table(format!("_table_{jp}").as_str()).await.unwrap().select_columns(&[format!("{rj}").as_str(), "__id__"]).unwrap();
+                    i_df
+                    .join_on(j_df, JoinType::Inner, [col(ri.to_string()).eq(lit(1)), col(rj.to_string()).eq(lit(1)), col(format!("_table_{ip}.__id__")).eq(col(format!("_table_{jp}.__id__")))]).unwrap()
+                } else {
+                    let i_df = ctx.table(format!("_table_{ip}").as_str()).await.unwrap().select_columns(&[format!("{rj}").as_str(), format!("{ri}").as_str(), "__id__"]).unwrap();
+                    i_df.filter(col(ri.to_string()).eq(lit(1))).unwrap().filter(col(rj.to_string()).eq(lit(1))).unwrap()
+                };
                 
                 query.collect().await.unwrap();
                 println!("{} complete!", x);
@@ -195,3 +207,74 @@ impl HandlerT for SplitO1 {
         Ok(())    
     }
 }
+
+pub struct SplitConstruct {
+    doc_len: u32,
+    ids: Vec<u32>,
+    words: Vec<String>,
+    idx: u32,
+    encode: HashMap<String, u32>,
+    partition: HashMap<String, u32>
+}
+
+impl SplitConstruct {
+    pub fn new(path: &str) -> Self {
+        let items = parse_wiki_dir(path).unwrap();
+        let doc_len = items.len() as u32;
+        info!("WikiItem len: {}", items.len());
+
+        let mut ids: Vec<u32> = Vec::new();
+        let mut words: Vec<String> = Vec::new();
+        let mut cnt = 0;
+        items.into_iter()
+        .for_each(|e| {
+            let WikiItem{id: _, text: w, title: _} = e;
+            w.split([' ', ',', '.', 'l'])
+            .into_iter()
+            .for_each(|e| {
+                ids.push(cnt);
+                words.push(e.to_uppercase().to_string());
+                cnt+=1;
+            })
+        });
+        Self { doc_len, ids, words, idx: 0, encode: HashMap::new(), partition: HashMap::new() } 
+    }
+
+    pub async fn split(&mut self, _: &str) -> Result<()> {
+        let _span = span!(Level::INFO, "SplitConstruct to_recordbatch").entered();
+
+        let nums = self.doc_len;
+        let res = to_hashmap(&self.ids, &self.words, self.doc_len);
+        info!("hashmap len: {}", res.len());
+        let column_nums = res.len();
+        let iter_nums = (column_nums + 99) / 100 as usize;
+        let mut column_iter = res.into_iter();
+
+        let ctx = SessionContext::new();
+        for i in 0..iter_nums {
+            info!("table {} creating", i);
+            let mut fields= vec![Field::new("__id__", DataType::UInt32, false)];
+            let mut columns: Vec<ArrayRef> = vec![Arc::new(UInt32Array::from_iter((0..(nums as u32)).into_iter()))];
+            column_iter.by_ref().take(100).for_each(|(field, column)| {
+                self.partition.insert(field.clone(), i as u32);
+                self.encode.insert(field.clone(), self.idx);
+                self.idx += 1;
+                fields.push(Field::new(format!("{}", self.idx-1), DataType::UInt8, true));
+                assert_eq!(nums, column.len() as u32, "the {}th", i);
+                columns.push(Arc::new(UInt8Array::from_slice(column.as_slice())));
+            });
+
+            let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
+            ctx.read_batch(batch)?.write_parquet(format!("./data/tables/table_{i}.parquet").as_str(), None).await?;
+        }
+
+
+        let mut encode_f = File::create("./data/encode.json")?;
+        let mut partition_f = File::create("./data/partition.json")?;
+        encode_f.write_all(serde_json::to_string( &self.encode)?.as_bytes())?;
+        partition_f.write_all(serde_json::to_string(&self.partition)?.as_bytes())?;
+
+        Ok(())
+    }
+}
+

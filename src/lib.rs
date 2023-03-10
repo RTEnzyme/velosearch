@@ -20,5 +20,6 @@ pub struct FastArgs {
 pub enum Handler {
    Base,
    SplitBase,
-   SplitO1
+   SplitO1,
+   LoadData
 }
