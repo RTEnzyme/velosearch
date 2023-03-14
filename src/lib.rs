@@ -1,6 +1,5 @@
 pub mod utils;
 pub mod index;
-// pub use utils::parse_wiki_file;
 
 pub use utils::Result;
 

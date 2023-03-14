@@ -1,6 +1,6 @@
 use std::{path::PathBuf, str::FromStr, sync::Arc};
 use async_trait::async_trait;
-use datafusion::{arrow::{datatypes::{DataType, Field, Schema}, array::{ArrayRef, UInt32Array, UInt8Array}, record_batch::RecordBatch}, from_slice::FromSlice};
+use datafusion::{arrow::{datatypes::{DataType, Field, Schema}, array::{ArrayRef, UInt32Array, Int8Array}, record_batch::RecordBatch}, from_slice::FromSlice};
 use tokio::time::Instant;
 use rand::prelude::*;
 use datafusion::prelude::*;
@@ -48,7 +48,7 @@ impl BaseHandler {
         let _span = span!(Level::INFO, "BaseHandler to_recordbatch").entered();
 
         let nums = self.ids[self.ids.len()-1] - self.ids[0] + 1;
-        let res = to_hashmap(&self.ids, &self.words, self.doc_len);
+        let res = to_hashmap(&self.ids, &self.words, self.doc_len, 4);
         // let res: HashMap<String, Vec<Option<u8>>> = self.to_hashmap().into_iter().take(100).collect();
         // self.words = res.keys().cloned().collect();
         let mut field_list = Vec::new();
@@ -62,7 +62,7 @@ impl BaseHandler {
         let mut column_list: Vec<ArrayRef> = Vec::new();
         column_list.push(Arc::new(UInt32Array::from_iter((0..(nums as u32)).into_iter())));
         res.values().for_each(|v| {
-            column_list.push(Arc::new(UInt8Array::from_slice(v.as_slice())))
+            column_list.push(Arc::new(Int8Array::from_slice(v[0].as_slice())))
         });
 
         Ok(RecordBatch::try_new(

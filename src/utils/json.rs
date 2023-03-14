@@ -23,24 +23,29 @@ pub fn parse_wiki_file(path: &Path) -> Result<Vec<WikiItem>> {
     }).collect())
 }
 
-pub fn to_hashmap(ids: &Vec<u32>, words: &Vec<String>, length: u32) -> HashMap<String, Vec<u8>> {
+pub fn to_hashmap(ids: &Vec<u32>, words: &Vec<String>, length: u32, partition_nums: usize) -> HashMap<String, Vec<Vec<i8>>> {
     info!("start to_hashmap(), ids len: {}, words len: {}", ids.len(), words.len());
     let mut res = HashMap::new();
+
     ids.iter().zip(words.iter())
     .for_each(|(id, w)| {
         res.entry(w.clone()).or_insert(Vec::new()).push(*id);
     });
+    let range_num = (length as f64/ partition_nums as f64).floor() as usize;
     res.iter_mut()
     .map(|(k, v)| {
         let set: HashSet<u32> = HashSet::from_iter(v.iter().cloned());
-        let v = (0..length).into_iter()
+        let v = (0..partition_nums).into_iter()
         .map(|i| {
-            if set.contains(&i) {
-                0x1
-            } else {
-                0x0 
-            }
-        }).collect();
+            ((i*range_num)..(i*range_num+range_num)).into_iter()
+            .map(|j| {
+                if set.contains(&(j as u32)) {
+                    1
+                } else {
+                    0
+                } 
+            }).collect::<Vec<i8>>()
+        }).collect::<Vec<Vec<i8>>>();
         (k.clone(), v)
     }).collect()
 }
