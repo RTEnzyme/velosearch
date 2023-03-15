@@ -1,5 +1,6 @@
 pub mod utils;
 pub mod index;
+pub mod datasources;
 
 pub use utils::Result;
 

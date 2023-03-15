@@ -887,6 +887,7 @@ dependencies = [
  "clap",
  "datafusion",
  "failure",
+ "futures",
  "rand",
  "serde",
  "serde_json",
