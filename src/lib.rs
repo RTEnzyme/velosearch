@@ -1,3 +1,5 @@
+extern crate datafusion;
+
 pub mod utils;
 pub mod index;
 pub mod datasources;

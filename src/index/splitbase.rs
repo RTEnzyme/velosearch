@@ -200,7 +200,7 @@ impl HandlerT for SplitO1 {
         test_keys.shuffle(&mut rand::thread_rng());
         let time = Instant::now();
         let mut handlers = Vec::with_capacity(50);
-        for x in 0..1 {
+        for x in 0..50 {
             let test_keys = test_keys[2*x..2*x+2].to_vec();
             let ctx = ctx.clone();
             let i = &test_keys[0];
@@ -225,7 +225,7 @@ impl HandlerT for SplitO1 {
                     i_df.with_column("cache", bitwise_and(col(format!("{rj}")), col(format!("{ri}")))).unwrap().filter(col("cache").eq(lit(1))).unwrap()
                 };
                 
-                query.explain(false, true).unwrap().show().await.unwrap();
+                query.collect().await.unwrap();
                 println!("{} complete!", x);
             }));
         }

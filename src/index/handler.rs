@@ -1,12 +1,12 @@
-use std::{path::PathBuf, str::FromStr, sync::Arc};
+use std::sync::Arc;
 use async_trait::async_trait;
-use datafusion::{arrow::{datatypes::{DataType, Field, Schema}, array::{ArrayRef, UInt32Array, Int8Array}, record_batch::RecordBatch}, from_slice::FromSlice};
+use datafusion::{arrow::{datatypes::{DataType, Field, Schema}, array::{ArrayRef, UInt32Array, Int8Array}, record_batch::RecordBatch}, from_slice::FromSlice, logical_expr::Operator};
 use tokio::time::Instant;
 use rand::prelude::*;
 use datafusion::prelude::*;
 use tracing::{span, info, Level};
 
-use crate::{utils::{parse_wiki_file, json::WikiItem, Result, to_hashmap}};
+use crate::{utils::{json::{WikiItem, parse_wiki_dir}, Result, to_hashmap}};
 
 #[async_trait]
 pub trait HandlerT {
@@ -14,7 +14,6 @@ pub trait HandlerT {
 
    async fn execute(&mut self) -> Result<()>;
 }
-
 
 pub struct BaseHandler {
     doc_len: u32,
@@ -24,22 +23,23 @@ pub struct BaseHandler {
 
 impl BaseHandler {
     pub fn new(path: &str) -> Self {
-        let items = parse_wiki_file(&PathBuf::from_str(path).unwrap()).unwrap();
+        let items = parse_wiki_dir(path).unwrap();
         let doc_len = items.len() as u32;
         let mut ids: Vec<u32> = Vec::new();
         let mut words: Vec<String> = Vec::new();
+        let mut cnt = 0;
 
         items.into_iter()
         .for_each(|e| {
-            let WikiItem{id: i, text: w, title: _} = e;
-            let id = u32::from_str(&i).unwrap();
-            w.split(" ")
+            let WikiItem{id: _, text: w, title: _} = e;
+            w.split([' ', ',', '.', ';', '-'])
             .into_iter()
+            .filter(|w| {w.len() > 2}) 
             .for_each(|e| {
-                ids.push(id);
-                words.push(e.to_string());
-            })
-        });
+                ids.push(cnt);
+                words.push(e.to_uppercase().to_string());
+                cnt+=1;
+            })});
 
         Self { doc_len, ids, words }
     }
@@ -47,14 +47,12 @@ impl BaseHandler {
     fn to_recordbatch(&mut self) -> Result<RecordBatch> {
         let _span = span!(Level::INFO, "BaseHandler to_recordbatch").entered();
 
-        let nums = self.ids[self.ids.len()-1] - self.ids[0] + 1;
-        let res = to_hashmap(&self.ids, &self.words, self.doc_len, 4);
-        // let res: HashMap<String, Vec<Option<u8>>> = self.to_hashmap().into_iter().take(100).collect();
-        // self.words = res.keys().cloned().collect();
+        let nums = self.doc_len as usize;
+        let res = to_hashmap(&self.ids, &self.words, self.doc_len, 1);
         let mut field_list = Vec::new();
         field_list.push(Field::new("__id__", DataType::UInt32, false));
         res.keys().for_each(|k| {
-            field_list.push(Field::new(format!("{k}"), DataType::UInt8, true));
+            field_list.push(Field::new(format!("{k}"), DataType::Int8, true));
         });
 
         let schema = Arc::new(Schema::new(field_list));
@@ -62,9 +60,10 @@ impl BaseHandler {
         let mut column_list: Vec<ArrayRef> = Vec::new();
         column_list.push(Arc::new(UInt32Array::from_iter((0..(nums as u32)).into_iter())));
         res.values().for_each(|v| {
+            assert_eq!(v[0].len(), nums);
             column_list.push(Arc::new(Int8Array::from_slice(v[0].as_slice())))
         });
-
+        info!("start try new RecordBatch");
         Ok(RecordBatch::try_new(
             schema,
             column_list
@@ -78,43 +77,61 @@ impl HandlerT for BaseHandler {
 
 
     fn get_words(&self, num: u32) -> Vec<String> {
-        self.words.iter().take(num as usize).cloned().collect()
+        let mut rng = thread_rng();
+        self.words.iter()
+        .choose_multiple(&mut rng, num as usize)
+        .into_iter()
+        .map(|e| e.to_string()).collect()
     }
 
     async fn execute(&mut self) -> Result<()> {
 
+        info!("start BaseHandler executing");
         let batch = self.to_recordbatch()?;
+        info!("End BaseHandler.to_recordbatch()");
         // declare a new context.
         let ctx = SessionContext::new();
 
         ctx.register_batch("t", batch)?;
-        let df = ctx.table("t").await?.cache().await?;
-        
+        info!("End register batch");
+        let df = ctx.table("t").await?;
+        info!("End cache table t");
 
-        let mut test_keys: Vec<String> = self.get_words(100);
-        test_keys.shuffle(&mut rand::thread_rng());
-        let test_keys = test_keys[..2].to_vec();
-        let i = &test_keys[0];
-        let j = &test_keys[1];
+        let test_keys: Vec<String> = self.get_words(100);
+        let mut test_iter = test_keys.into_iter();
+
+        let mut handlers = Vec::with_capacity(50);
         let time = Instant::now();
-        df.clone().explain(false, true)?.show().await?;
-        info!("bare select time: {}", time.elapsed().as_millis());
-        let time = Instant::now();
-        df
-            .filter(col(i).is_not_null()
-            .and(col(j).is_not_null()))?
-            .select_columns(&["__id__", i, j])? 
-            .explain(false, true)?
-            // .collect().await?
-            .show().await?;
-        // println!("{}", format!("select {i}, {j} from t where {i} is not null and {j} is not null"));
-        // ctx.sql(&format!("select `{i}`, `{j}` from t where `{i}` is not null and `{j}` is not null")).await?;
-        let query_time = time.elapsed().as_millis();
-        info!("query time: {}", query_time);
+        let mut cnt = 0;
+        for x in 0..50 {
+            let keys = test_iter.by_ref().take(2).collect::<Vec<String>>();
+            if keys[1] == keys[0] {
+                continue
+            }
+            cnt += 1;
+            let df = df.clone();
+            handlers.push(tokio::spawn(async move {
+                df
+                    .select_columns(&["__id__", &keys[0], &keys[1]]).unwrap()
+                    .with_column("cache", bitwise_and(col(&keys[0]), col(&keys[1]))).unwrap()
+                    .filter(col("cache").eq(lit(1 as i8))).unwrap()
+                    .explain(false, true).unwrap()
+                    .show().await.unwrap();
+                println!("{} complete", x);
+            }));
+        }
+        let query_time = time.elapsed().as_micros();
+        for handle in handlers {
+            handle.await.unwrap();
+        }
+        info!("query time: {}", query_time/cnt);
         Ok(())
     }
 }
 
+fn bitwise_and(left: Expr, right: Expr) -> Expr {
+    binary_expr(left, Operator::BitwiseAnd, right)
+}
 
 #[cfg(test)]
 mod test {

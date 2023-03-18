@@ -12,6 +12,7 @@ pub struct WikiItem {
 }
 
 pub fn parse_wiki_file(path: &Path) -> Result<Vec<WikiItem>> {
+    info!("Start parsing {:?}", path);
     let file = File::open(path).unwrap();
     let buf_reader = BufReader::new(file);
     Ok(

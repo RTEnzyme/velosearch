@@ -16,6 +16,7 @@ pub struct PostingTable {
 
 impl PostingTable {
     pub fn new(schema: SchemaRef, batches: Vec<Vec<RecordBatch>>) -> Self {
+        // construct field map to index the position of the fields in schema
         let mut field_map = HashMap::new();
         schema.fields()
         .into_iter().enumerate()
@@ -37,6 +38,7 @@ impl TableProvider for PostingTable {
     }
 
     fn schema(&self) -> SchemaRef {
+        // @TODO how to search field index efficiently
         self.schema.clone()
     }
 
