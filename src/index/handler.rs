@@ -1,12 +1,12 @@
 use std::sync::Arc;
 use async_trait::async_trait;
-use datafusion::{arrow::{datatypes::{DataType, Field, Schema}, array::{ArrayRef, UInt32Array, Int8Array}, record_batch::RecordBatch}, from_slice::FromSlice, logical_expr::Operator};
+use datafusion::{arrow::{datatypes::{DataType, Field, Schema}, array::{ArrayRef, UInt32Array, Int8Array}, record_batch::RecordBatch}, from_slice::FromSlice, logical_expr::Operator, datasource::{TableProvider, MemTable}, sql::TableReference};
 use tokio::time::Instant;
 use rand::prelude::*;
 use datafusion::prelude::*;
 use tracing::{span, info, Level};
 
-use crate::{utils::{json::{WikiItem, parse_wiki_dir}, Result, to_hashmap}};
+use crate::{utils::{json::{WikiItem, parse_wiki_dir, to_hashmap_v2}, Result, to_hashmap}};
 
 #[async_trait]
 pub trait HandlerT {
@@ -17,8 +17,9 @@ pub trait HandlerT {
 
 pub struct BaseHandler {
     doc_len: u32,
-    ids: Vec<u32>,
-    pub words: Vec<String>
+    ids: Option<Vec<u32>>,
+    words: Option<Vec<String>>,
+    test_case: Vec<String>
 }
 
 impl BaseHandler {
@@ -41,14 +42,19 @@ impl BaseHandler {
                 cnt+=1;
             })});
 
-        Self { doc_len, ids, words }
+        let mut rng = thread_rng();
+        let test_case = words.iter()
+        .choose_multiple(&mut rng, 100)
+        .into_iter()
+        .map(|e| e.to_string()).collect();
+        Self { doc_len, ids: Some(ids), words: Some(words), test_case }
     }
 
-    fn to_recordbatch(&mut self) -> Result<RecordBatch> {
+    fn to_recordbatch(&mut self) -> Result<Vec<RecordBatch>> {
         let _span = span!(Level::INFO, "BaseHandler to_recordbatch").entered();
 
-        let nums = self.doc_len as usize;
-        let res = to_hashmap(&self.ids, &self.words, self.doc_len, 1);
+        let partition_nums = 64 as usize;
+        let res = to_hashmap_v2(self.ids.take().unwrap(), self.words.take().unwrap(), self.doc_len, partition_nums);
         let mut field_list = Vec::new();
         field_list.push(Field::new("__id__", DataType::UInt32, false));
         res.keys().for_each(|k| {
@@ -57,17 +63,30 @@ impl BaseHandler {
 
         let schema = Arc::new(Schema::new(field_list));
         info!("The term dict length: {:}", res.len());
-        let mut column_list: Vec<ArrayRef> = Vec::new();
-        column_list.push(Arc::new(UInt32Array::from_iter((0..(nums as u32)).into_iter())));
-        res.values().for_each(|v| {
-            assert_eq!(v[0].len(), nums);
-            column_list.push(Arc::new(Int8Array::from_slice(v[0].as_slice())))
+        let mut column_list: Vec<Vec<ArrayRef>> = Vec::with_capacity(partition_nums);
+        let mut is_init = false;
+        res.into_iter().for_each(|(_, v)| {
+            assert_eq!(v.len(), partition_nums);
+            if !is_init {
+                let mut cnt = 0;
+                for i in 0..partition_nums {
+                    column_list.push(vec![Arc::new(UInt32Array::from_iter((cnt..(cnt + v[i].len() as u32)).into_iter()))]);
+                    cnt += v[i].len() as u32;
+                }
+                is_init = true;
+            }
+            (0..partition_nums).into_iter()
+            .for_each(|i| {
+                column_list[i].push(Arc::new(Int8Array::from_slice(v[i].as_slice())))
+            })
         });
         info!("start try new RecordBatch");
-        Ok(RecordBatch::try_new(
-            schema,
-            column_list
-        )?)
+        Ok(column_list.into_iter().map(|p| {
+            RecordBatch::try_new(
+                schema.clone(),
+                p
+            ).unwrap()
+        }).collect())
     }
     
 }
@@ -77,33 +96,30 @@ impl HandlerT for BaseHandler {
 
 
     fn get_words(&self, num: u32) -> Vec<String> {
-        let mut rng = thread_rng();
-        self.words.iter()
-        .choose_multiple(&mut rng, num as usize)
-        .into_iter()
-        .map(|e| e.to_string()).collect()
+        vec![]
     }
 
     async fn execute(&mut self) -> Result<()> {
 
         info!("start BaseHandler executing");
         let batch = self.to_recordbatch()?;
+        assert_eq!(batch.len(), 64);
         info!("End BaseHandler.to_recordbatch()");
         // declare a new context.
         let ctx = SessionContext::new();
 
-        ctx.register_batch("t", batch)?;
+        register_table(format!("_table_").as_str(), batch, &ctx).unwrap();
+        
         info!("End register batch");
-        let df = ctx.table("t").await?;
+        let df = ctx.table("_table_").await?;
         info!("End cache table t");
 
-        let test_keys: Vec<String> = self.get_words(100);
-        let mut test_iter = test_keys.into_iter();
+        let mut test_iter = self.test_case.clone().into_iter();
 
         let mut handlers = Vec::with_capacity(50);
         let time = Instant::now();
         let mut cnt = 0;
-        for x in 0..50 {
+        for x in 0..1 {
             let keys = test_iter.by_ref().take(2).collect::<Vec<String>>();
             if keys[1] == keys[0] {
                 continue
@@ -113,17 +129,19 @@ impl HandlerT for BaseHandler {
             handlers.push(tokio::spawn(async move {
                 df
                     .select_columns(&["__id__", &keys[0], &keys[1]]).unwrap()
-                    .with_column("cache", bitwise_and(col(&keys[0]), col(&keys[1]))).unwrap()
-                    .filter(col("cache").eq(lit(1 as i8))).unwrap()
+                    // .filter(col(&keys[0]).eq(lit(1 as i8)).and(col(&keys[1]).eq(lit(1 as i8)))).unwrap()
+                    .filter(bitwise_and(col(&keys[0]), col(&keys[1])).eq(lit(1 as i8))).unwrap()
+                    // .select_columns(&["__id__"]).unwrap()
+                    // .collect().await.unwrap();
                     .explain(false, true).unwrap()
                     .show().await.unwrap();
                 println!("{} complete", x);
             }));
         }
-        let query_time = time.elapsed().as_micros();
         for handle in handlers {
             handle.await.unwrap();
         }
+        let query_time = time.elapsed().as_micros();
         info!("query time: {}", query_time/cnt);
         Ok(())
     }
@@ -131,6 +149,21 @@ impl HandlerT for BaseHandler {
 
 fn bitwise_and(left: Expr, right: Expr) -> Expr {
     binary_expr(left, Operator::BitwiseAnd, right)
+}
+
+pub fn register_table(
+    table_name: &str,
+    batch: Vec<RecordBatch>,
+    ctx: &SessionContext
+) -> Result<Option<Arc<dyn TableProvider>>> {
+    let table = MemTable::try_new(batch[0].schema(), vec![batch])?;
+    let table = ctx.register_table(
+        TableReference::Bare {
+            table: table_name.into(),
+        },
+        Arc::new(table),
+    )?;
+    Ok(table)
 }
 
 #[cfg(test)]
