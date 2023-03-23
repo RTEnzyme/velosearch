@@ -1,4 +1,6 @@
-use datafusion::{prelude::{Expr, binary_expr, col, lit}, logical_expr::{Operator, LogicalPlan, LogicalPlanBuilder}, execution::context::SessionState, error::DataFusionError};
+use std::sync::Arc;
+
+use datafusion::{prelude::{Expr, binary_expr, col, lit}, logical_expr::{Operator, LogicalPlan, LogicalPlanBuilder}, execution::context::{SessionState, TaskContext}, error::DataFusionError, physical_plan::{ExecutionPlan, collect}, arrow::record_batch::RecordBatch};
 
 use crate::{Result, utils::FastErr};
 
@@ -71,6 +73,8 @@ impl BooleanPredicateBuilder {
     // }
 }
 
+/// BooleanQuery represents a full-text search query.
+/// 
 #[derive(Debug, Clone)]
 pub struct BooleanQuery {
     plan: LogicalPlan,
@@ -78,6 +82,7 @@ pub struct BooleanQuery {
 }
 
 impl BooleanQuery {
+    /// Create a new BooleanQuery
     pub fn new(plan: LogicalPlan, session_state: SessionState) -> Self {
         Self {
             plan,
@@ -85,6 +90,7 @@ impl BooleanQuery {
         }
     }
 
+    /// Create BooleanQuery based on a bitwise binary operation expression
     pub fn boolean_predicate(self, predicate: Expr) -> Result<Self> {
         match predicate {
             Expr::BinaryExpr(_) => Ok(Self {
@@ -95,6 +101,26 @@ impl BooleanQuery {
         }   
     } 
 
+    /// Create a physical plan
+    pub async fn create_physical_plan(self) -> Result<Arc<dyn ExecutionPlan>> {
+        self.session_state
+            .create_physical_plan(&self.plan).await
+            .map_err(|e| FastErr::DataFusionErr(e))
+    }
+
+
+    /// Convert the logical plan represented by this BooleanQuery into a physical plan and
+    /// execute it, collect all resulting batches into memory
+    /// Executes this DataFrame and collects all results into a vecotr of RecordBatch.
+    pub async fn collect(self) -> Result<Vec<RecordBatch>> {
+        let task_ctx = Arc::new(self.task_ctx());
+        let plan = self.create_physical_plan().await?;
+        collect(plan, task_ctx).await.map_err(|e| FastErr::DataFusionErr(e))
+    }
+
+    fn task_ctx(&self) -> TaskContext {
+        TaskContext::from(&self.session_state)
+    }
 
 }
 
@@ -109,6 +135,8 @@ fn bitwise_or(left: Expr, right: Expr) -> Expr {
 // fn bitwise_xor(left: Expr, right: Expr) -> Expr {
 //     binary_expr(left, Operator::BitwiseXor, right)
 // }
+
+
 
 #[cfg(test)]
 pub mod tests {

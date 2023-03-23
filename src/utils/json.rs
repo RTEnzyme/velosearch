@@ -3,7 +3,7 @@ use std::{path::Path, fs::{File, self}, io::{BufReader, BufRead}, collections::{
 use serde::{Deserialize, Serialize};
 use threadpool::ThreadPool;
 use tracing::info;
-use rayon::prelude::{self, IntoParallelIterator, IndexedParallelIterator, ParallelIterator};
+use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use crate::utils::Result;
 
 #[derive(Serialize, Deserialize)]
