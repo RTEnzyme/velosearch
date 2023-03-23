@@ -11,7 +11,7 @@ use futures::Stream;
 pub struct PostingTable {
     schema: SchemaRef,
     field_map: Arc<HashMap<String, usize>>,
-    postings: Vec<Vec<RecordBatch>>
+    postings: Vec<Vec<RecordBatch>>,
 }
 
 impl PostingTable {

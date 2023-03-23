@@ -1,4 +1,6 @@
-#![warn(unused_variables, unused_imports, dead_code)]
+#![allow(unused_variables, unused_imports, dead_code)]
+
+
 use std::collections::HashMap;
 use std::fs::File;
 use std::sync::Arc;

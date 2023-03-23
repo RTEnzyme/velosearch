@@ -6,7 +6,7 @@ use rand::prelude::*;
 use datafusion::prelude::*;
 use tracing::{span, info, Level};
 
-use crate::{utils::{json::{WikiItem, parse_wiki_dir, to_hashmap_v2}, Result, to_hashmap}};
+use crate::{utils::{json::{WikiItem, parse_wiki_dir, to_hashmap_v2}, Result}};
 
 #[async_trait]
 pub trait HandlerT {
@@ -47,6 +47,7 @@ impl BaseHandler {
         .choose_multiple(&mut rng, 100)
         .into_iter()
         .map(|e| e.to_string()).collect();
+        info!("self.doc_len = {}", doc_len);
         Self { doc_len, ids: Some(ids), words: Some(words), test_case }
     }
 
@@ -95,7 +96,7 @@ impl BaseHandler {
 impl HandlerT for BaseHandler {
 
 
-    fn get_words(&self, num: u32) -> Vec<String> {
+    fn get_words(&self, _: u32) -> Vec<String> {
         vec![]
     }
 
@@ -131,6 +132,7 @@ impl HandlerT for BaseHandler {
                     .select_columns(&["__id__", &keys[0], &keys[1]]).unwrap()
                     // .filter(col(&keys[0]).eq(lit(1 as i8)).and(col(&keys[1]).eq(lit(1 as i8)))).unwrap()
                     .filter(bitwise_and(col(&keys[0]), col(&keys[1])).eq(lit(1 as i8))).unwrap()
+                    .select_columns(&["__id__"]).unwrap()
                     // .select_columns(&["__id__"]).unwrap()
                     // .collect().await.unwrap();
                     .explain(false, true).unwrap()

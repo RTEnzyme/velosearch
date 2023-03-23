@@ -3,8 +3,10 @@ extern crate datafusion;
 pub mod utils;
 pub mod index;
 pub mod datasources;
-
+pub mod query;
+pub mod context;
 pub use utils::Result;
+pub use context::BooleanContext;
 
 use clap::{Parser, ValueEnum};
 
