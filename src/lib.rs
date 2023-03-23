@@ -17,7 +17,8 @@ pub struct FastArgs {
     pub path: Option<String>,
 
     #[arg(value_enum)]
-    pub handler: Handler
+    pub handler: Handler,
+
 }
 
 #[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, ValueEnum, Debug)]
@@ -25,5 +26,6 @@ pub enum Handler {
    Base,
    SplitBase,
    SplitO1,
-   LoadData
+   LoadData,
+   BooleanQuery,
 }

@@ -1,13 +1,13 @@
 
 use clap::Parser;
-use fastfull_search::index::{BaseHandler, SplitHandler, SplitO1, SplitConstruct};
+use fastfull_search::index::{BaseHandler, SplitHandler, SplitO1, SplitConstruct, BooleanQueryHandler};
 use fastfull_search::{Result, FastArgs, Handler};
 use fastfull_search::index::handler::HandlerT;
 use tracing::{info, Level};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt().with_max_level(Level::INFO).init();
+    tracing_subscriber::fmt().with_max_level(Level::DEBUG).init();
     info!("main execution");
     let args = FastArgs::parse();
 
@@ -20,6 +20,9 @@ async fn main() -> Result<()> {
         Handler::LoadData =>  {
             SplitConstruct::new(&args.path.unwrap()).split("").await?;
             return Ok(())
+        },
+        Handler::BooleanQuery => {
+            Box::new(BooleanQueryHandler::new(&args.path.unwrap()))
         }
     };
     handler.execute().await?;

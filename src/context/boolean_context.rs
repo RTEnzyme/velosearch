@@ -101,7 +101,7 @@ impl BooleanContext {
     pub fn register_index<'a>(
         &'a self,
         index_ref: impl Into<TableReference<'a>>,
-        provider: Arc<PostingTable>,
+        provider: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let index_ref = index_ref.into();
         let index = index_ref.table().to_owned();
