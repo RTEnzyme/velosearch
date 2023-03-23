@@ -1,9 +1,8 @@
 use std::sync::Arc;
 use async_trait::async_trait;
-use datafusion::{arrow::{datatypes::{DataType, Field, Schema}, array::{ArrayRef, UInt32Array, Int8Array}, record_batch::RecordBatch}, from_slice::FromSlice, logical_expr::Operator, datasource::{TableProvider, MemTable}, sql::TableReference};
+use datafusion::{arrow::{datatypes::{DataType, Field, Schema}, array::{ArrayRef, UInt32Array, Int8Array}, record_batch::RecordBatch}, from_slice::FromSlice, datasource::{TableProvider, MemTable}, sql::TableReference};
 use tokio::time::Instant;
 use rand::prelude::*;
-use datafusion::prelude::*;
 use tracing::{span, info, Level};
 
 use crate::{utils::{json::{WikiItem, parse_wiki_dir, to_hashmap_v2}, Result}, BooleanContext, query::boolean_query::BooleanPredicateBuilder};
@@ -136,10 +135,6 @@ impl HandlerT for BooleanQueryHandler {
         info!("query time: {}", query_time/cnt);
         Ok(())
     }
-}
-
-fn bitwise_and(left: Expr, right: Expr) -> Expr {
-    binary_expr(left, Operator::BitwiseAnd, right)
 }
 
 pub fn register_index(

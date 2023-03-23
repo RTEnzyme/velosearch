@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use datafusion::{execution::{context::SessionState, runtime_env::RuntimeEnv}, prelude::SessionConfig, sql::TableReference, logical_expr::LogicalPlanBuilder, datasource::{provider_as_source, TableProvider}, error::DataFusionError};
 use parking_lot::RwLock;
 
-use crate::{query::boolean_query::BooleanQuery, datasources::posting_table::PostingTable, utils::FastErr};
+use crate::{query::boolean_query::BooleanQuery, utils::FastErr};
 use crate::utils::Result;
 
 #[derive(Clone)]

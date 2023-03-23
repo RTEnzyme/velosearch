@@ -108,6 +108,16 @@ impl BooleanQuery {
             .map_err(|e| FastErr::DataFusionErr(e))
     }
 
+    /// Return a BooleanQuery with the explanation of its plan so far
+    /// 
+    /// if `analyze` is specified, runs the plan and reports metrics
+    /// 
+    pub fn explain(self, verbose: bool, analyze: bool) -> Result<BooleanQuery> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .explain(verbose, analyze)?
+            .build()?;
+        Ok(BooleanQuery::new(plan, self.session_state))
+    }
 
     /// Convert the logical plan represented by this BooleanQuery into a physical plan and
     /// execute it, collect all resulting batches into memory
