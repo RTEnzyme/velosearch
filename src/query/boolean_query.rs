@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::{prelude::{Expr, binary_expr, col, lit}, logical_expr::{Operator, LogicalPlan, LogicalPlanBuilder}, execution::context::{SessionState, TaskContext}, error::DataFusionError, physical_plan::{ExecutionPlan, collect}, arrow::record_batch::RecordBatch};
+use datafusion::{prelude::{Expr, binary_expr, col, lit}, logical_expr::{Operator, LogicalPlan, LogicalPlanBuilder, BinaryExpr}, execution::context::{SessionState, TaskContext}, error::DataFusionError, physical_plan::{ExecutionPlan, collect}, arrow::record_batch::RecordBatch};
 
 use crate::{Result, utils::FastErr};
 
@@ -93,10 +93,13 @@ impl BooleanQuery {
     /// Create BooleanQuery based on a bitwise binary operation expression
     pub fn boolean_predicate(self, predicate: Expr) -> Result<Self> {
         match predicate {
-            Expr::BinaryExpr(_) => Ok(Self {
-                plan: LogicalPlanBuilder::from(self.plan).filter(predicate)?.build()?,
+            Expr::BinaryExpr(expr) => {
+                
+                Ok(Self {
+                plan: LogicalPlanBuilder::from(self.plan).filter(Expr::BinaryExpr(expr))?.build()?,
                 session_state: self.session_state 
-            }),
+            })
+            },
             _ => Err(FastErr::UnimplementErr("Predicate expression must be the BinaryExpr".to_string()))
         }   
     } 
@@ -146,13 +149,27 @@ fn bitwise_or(left: Expr, right: Expr) -> Expr {
 //     binary_expr(left, Operator::BitwiseXor, right)
 // }
 
-
+fn binary_expr_children(be: &Expr) -> Vec<Expr> {
+    let mut children = Vec::new();
+    match be {
+        Expr::BinaryExpr(b) => {
+            children.append(&mut binary_expr_children(&b.left));
+            children.append(&mut binary_expr_children(&b.right));
+        },
+        Expr::Column(c) => {
+            children.push(Expr::Column(c.clone()));
+        }
+        Expr::Literal(_) => {},
+        _ => unreachable!()
+    }
+    children
+}
 
 #[cfg(test)]
 pub mod tests {
     use crate::utils::Result;
 
-    use super::BooleanPredicateBuilder;
+    use super::{BooleanPredicateBuilder, binary_expr_children};
 
     #[test]
     fn boolean_must_builder() -> Result<()> {
@@ -165,6 +182,14 @@ pub mod tests {
     fn boolean_should() -> Result<()> {
         let predicate = BooleanPredicateBuilder::should(&["a", "b", "c"])?;
         assert_eq!(format!("{}", predicate.build()).as_str(), "((a | b) | c) = Int8(1)");
+        Ok(())
+    }
+
+    #[test]
+    fn binary_expr_children_test() -> Result<()> {
+        let predicate = BooleanPredicateBuilder::should(&["a", "b", "c"])?;
+        println!("{:?}", binary_expr_children(&predicate.build()));
+        assert_eq!("", "1");
         Ok(())
     }
 }

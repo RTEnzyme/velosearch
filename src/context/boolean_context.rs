@@ -1,7 +1,7 @@
 use std::{sync::Arc};
 
 use chrono::{DateTime, Utc};
-use datafusion::{execution::{context::SessionState, runtime_env::RuntimeEnv}, prelude::SessionConfig, sql::TableReference, logical_expr::LogicalPlanBuilder, datasource::{provider_as_source, TableProvider}, error::DataFusionError};
+use datafusion::{execution::{context::SessionState, runtime_env::RuntimeEnv}, prelude::SessionConfig, sql::TableReference, logical_expr::LogicalPlanBuilder, datasource::{provider_as_source, TableProvider}, error::DataFusionError, optimizer::{OptimizerRule, simplify_expressions::SimplifyExpressions, rewrite_disjunctive_predicate::RewriteDisjunctivePredicate, eliminate_filter::EliminateFilter, push_down_filter::PushDownFilter, push_down_projection::PushDownProjection}};
 use parking_lot::RwLock;
 
 use crate::{query::boolean_query::BooleanQuery, utils::FastErr};
@@ -37,6 +37,8 @@ impl BooleanContext {
      /// Creates a new session context using the provided configuration and [`RuntimeEnv`].
      pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         let state = SessionState::with_config_rt(config, runtime);
+        // Add custom optimizer rules
+        let state = state.with_optimizer_rules(optimizer_rules());
         Self::with_state(state)
     }
 
@@ -121,4 +123,16 @@ impl BooleanContext {
     pub fn session_start_time(&self) -> DateTime<Utc> {
         self.session_start_time.clone()
     }
+}
+
+fn optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Sync + Send>> {
+    vec![
+        Arc::new(SimplifyExpressions::new()),
+        Arc::new(RewriteDisjunctivePredicate::new()),
+        Arc::new(SimplifyExpressions::new()),
+        Arc::new(EliminateFilter::new()),
+        Arc::new(PushDownFilter::new()),
+        Arc::new(SimplifyExpressions::new()),
+        Arc::new(PushDownProjection::new())
+    ]
 }
