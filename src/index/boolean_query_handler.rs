@@ -114,7 +114,7 @@ impl HandlerT for BooleanQueryHandler {
         let mut handlers = Vec::with_capacity(50);
         let time = Instant::now();
         let mut cnt = 0;
-        for x in 0..1 {
+        for x in 0..50 {
             let keys = test_iter.by_ref().take(2).collect::<Vec<String>>();
             if keys[1] == keys[0] {
                 continue
@@ -124,7 +124,8 @@ impl HandlerT for BooleanQueryHandler {
             let predicate = BooleanPredicateBuilder::must(&[&keys[0], &keys[1]])?.build();
             handlers.push(tokio::spawn(async move {
                 bq.boolean_predicate(predicate).unwrap()
-                .collect().await.unwrap();
+                .explain(false, true).unwrap()
+                .show().await.unwrap();
                 println!("{} complete", x);
             }));
         }

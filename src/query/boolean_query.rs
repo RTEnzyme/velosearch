@@ -2,12 +2,13 @@ use std::sync::Arc;
 
 use datafusion::{
     prelude::{binary_expr, col, lit, Expr}, 
-    logical_expr::{Operator, LogicalPlan, LogicalPlanBuilder, BinaryExpr}, 
+    logical_expr::{Operator, LogicalPlan, LogicalPlanBuilder}, 
     execution::context::{SessionState, TaskContext}, 
     error::DataFusionError, 
     physical_plan::{ExecutionPlan, collect}, 
-    arrow::record_batch::RecordBatch
+    arrow::{record_batch::RecordBatch, util::pretty}
 };
+use tracing::debug;
 
 use crate::{Result, utils::FastErr};
 
@@ -130,6 +131,13 @@ impl BooleanQuery {
         Ok(BooleanQuery::new(plan, self.session_state))
     }
 
+    /// Print results
+    /// 
+    pub async fn show(self) -> Result<()> {
+        let results = self.collect().await?;
+        Ok(pretty::print_batches(&results)?)
+    }
+
     /// Convert the logical plan represented by this BooleanQuery into a physical plan and
     /// execute it, collect all resulting batches into memory
     /// Executes this DataFrame and collects all results into a vecotr of RecordBatch.
@@ -158,6 +166,7 @@ fn bitwise_or(left: Expr, right: Expr) -> Expr {
 // }
 
 fn binary_expr_columns(be: &Expr) -> Vec<Expr> {
+    debug!("Binary expr columns: {:?}", be);
     match be {
         Expr::BinaryExpr(b) => {
             let mut left_columns = binary_expr_columns(&b.left);
@@ -166,7 +175,8 @@ fn binary_expr_columns(be: &Expr) -> Vec<Expr> {
         },
         Expr::Column(c) => {
             vec![Expr::Column(c.clone())]
-        }
+        },
+        Expr::Literal(_) => { Vec::new() },
         _ => unreachable!()
     }
 }
