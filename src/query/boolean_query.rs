@@ -149,27 +149,28 @@ fn bitwise_or(left: Expr, right: Expr) -> Expr {
 //     binary_expr(left, Operator::BitwiseXor, right)
 // }
 
-fn binary_expr_children(be: &Expr) -> Vec<Expr> {
-    let mut children = Vec::new();
+fn binary_expr_columns(be: &Expr) -> Vec<Expr> {
     match be {
         Expr::BinaryExpr(b) => {
-            children.append(&mut binary_expr_children(&b.left));
-            children.append(&mut binary_expr_children(&b.right));
+            let mut left_columns = binary_expr_columns(&b.left);
+            left_columns.extend(binary_expr_columns(&b.right));
+            left_columns
         },
         Expr::Column(c) => {
-            children.push(Expr::Column(c.clone()));
+            vec![Expr::Column(c.clone())]
         }
-        Expr::Literal(_) => {},
-        _ => unreachable!()
+        _ => Vec::new()
     }
-    children
 }
+
 
 #[cfg(test)]
 pub mod tests {
+    use datafusion::prelude::col;
+
     use crate::utils::Result;
 
-    use super::{BooleanPredicateBuilder, binary_expr_children};
+    use super::{BooleanPredicateBuilder, binary_expr_columns};
 
     #[test]
     fn boolean_must_builder() -> Result<()> {
@@ -188,8 +189,7 @@ pub mod tests {
     #[test]
     fn binary_expr_children_test() -> Result<()> {
         let predicate = BooleanPredicateBuilder::should(&["a", "b", "c"])?;
-        println!("{:?}", binary_expr_children(&predicate.build()));
-        assert_eq!("", "1");
+        assert_eq!(binary_expr_columns(&predicate.build()), vec![col("a"), col("b"), col("c")]);
         Ok(())
     }
 }
