@@ -1,6 +1,13 @@
 use std::sync::Arc;
 
-use datafusion::{prelude::{Expr, binary_expr, col, lit}, logical_expr::{Operator, LogicalPlan, LogicalPlanBuilder, BinaryExpr}, execution::context::{SessionState, TaskContext}, error::DataFusionError, physical_plan::{ExecutionPlan, collect}, arrow::record_batch::RecordBatch};
+use datafusion::{
+    prelude::{binary_expr, col, lit, Expr}, 
+    logical_expr::{Operator, LogicalPlan, LogicalPlanBuilder, BinaryExpr}, 
+    execution::context::{SessionState, TaskContext}, 
+    error::DataFusionError, 
+    physical_plan::{ExecutionPlan, collect}, 
+    arrow::record_batch::RecordBatch
+};
 
 use crate::{Result, utils::FastErr};
 
@@ -92,11 +99,12 @@ impl BooleanQuery {
 
     /// Create BooleanQuery based on a bitwise binary operation expression
     pub fn boolean_predicate(self, predicate: Expr) -> Result<Self> {
+        let project_exprs = binary_expr_columns(&predicate);
         match predicate {
             Expr::BinaryExpr(expr) => {
-                
+                let project_plan = LogicalPlanBuilder::from(self.plan).project(project_exprs)?.build()?;
                 Ok(Self {
-                plan: LogicalPlanBuilder::from(self.plan).filter(Expr::BinaryExpr(expr))?.build()?,
+                plan: LogicalPlanBuilder::from(project_plan).filter(Expr::BinaryExpr(expr))?.build()?,
                 session_state: self.session_state 
             })
             },
@@ -159,7 +167,7 @@ fn binary_expr_columns(be: &Expr) -> Vec<Expr> {
         Expr::Column(c) => {
             vec![Expr::Column(c.clone())]
         }
-        _ => Vec::new()
+        _ => unreachable!()
     }
 }
 
