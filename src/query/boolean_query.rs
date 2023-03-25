@@ -135,6 +135,7 @@ impl BooleanQuery {
     /// 
     pub async fn show(self) -> Result<()> {
         let results = self.collect().await?;
+        debug!("Show() collect result from self.collect()");
         Ok(pretty::print_batches(&results)?)
     }
 
@@ -143,7 +144,9 @@ impl BooleanQuery {
     /// Executes this DataFrame and collects all results into a vecotr of RecordBatch.
     pub async fn collect(self) -> Result<Vec<RecordBatch>> {
         let task_ctx = Arc::new(self.task_ctx());
+        debug!("Create physical plan");
         let plan = self.create_physical_plan().await?;
+        debug!("Finish physical plan");
         collect(plan, task_ctx).await.map_err(|e| FastErr::DataFusionErr(e))
     }
 

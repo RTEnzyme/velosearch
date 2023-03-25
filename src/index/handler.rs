@@ -129,13 +129,13 @@ impl HandlerT for BaseHandler {
             let df = df.clone();
             handlers.push(tokio::spawn(async move {
                 df
-                    .select_columns(&["__id__", &keys[0], &keys[1]]).unwrap()
+                    // .select_columns(&["__id__", &keys[0], &keys[1]]).unwrap()
                     // .filter(col(&keys[0]).eq(lit(1 as i8)).and(col(&keys[1]).eq(lit(1 as i8)))).unwrap()
-                    .filter(bitwise_and(col(&keys[0]), col(&keys[1])).eq(lit(1 as i8))).unwrap()
-                    .select_columns(&["__id__"]).unwrap()
+                    // .filter(bitwise_and(col(&keys[0]), col(&keys[1])).eq(lit(1 as i8))).unwrap()
+                    .select_columns(&["__id__", "FIRST", "TIME"]).unwrap()
                     // .select_columns(&["__id__"]).unwrap()
                     // .collect().await.unwrap();
-                    .explain(false, true).unwrap()
+                    // .explain(false, true).unwrap()
                     .show().await.unwrap();
                 println!("{} complete", x);
             }));

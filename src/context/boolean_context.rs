@@ -6,7 +6,7 @@ use datafusion::{
     prelude::SessionConfig, sql::TableReference, logical_expr::LogicalPlanBuilder, 
     datasource::{provider_as_source, TableProvider}, error::DataFusionError, 
     optimizer::{OptimizerRule, rewrite_disjunctive_predicate::RewriteDisjunctivePredicate, push_down_projection::PushDownProjection}, 
-    physical_optimizer::{coalesce_batches::CoalesceBatches, pipeline_checker::PipelineChecker, PhysicalOptimizerRule}
+    physical_optimizer::{coalesce_batches::CoalesceBatches, pipeline_checker::PipelineChecker, PhysicalOptimizerRule, repartition::Repartition, dist_enforcement::EnforceDistribution}, scalar::ScalarValue
 };
 use parking_lot::RwLock;
 
@@ -31,7 +31,9 @@ impl Default for BooleanContext {
 
 impl BooleanContext {
     pub fn new() -> Self {
-        Self::with_config(SessionConfig::new())
+        let config = SessionConfig::new()
+            .set("datafusion.optimizer.max_passes", ScalarValue::UInt8(Some(0x1)));
+        Self::with_config(config)
     }
 
     /// Creates a new session context using the provided session configuration.
@@ -147,7 +149,9 @@ fn optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Sync + Send>> {
 
 fn physical_optimizer_rulse() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
     vec![
-        Arc::new(CoalesceBatches::new()),
-        Arc::new(PipelineChecker::new())
+        // Arc::new(Repartition::new()),
+        // Arc::new(EnforceDistribution::new()),
+        // Arc::new(CoalesceBatches::new()),
+        // Arc::new(PipelineChecker::new())
     ]
 }
