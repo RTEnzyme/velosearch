@@ -17,6 +17,8 @@ pub enum FastErr {
     UnimplementErr(String),
     #[fail(display = "SerdeErr: {}", _0)]
     SerdeErr(serde_json::Error),
+    #[fail(display = "InternalErr: {}", _0)]
+    InternalErr(String)
 }
 
 impl From<serde_json::Error> for FastErr {

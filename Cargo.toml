@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[workspace]
+members = ["learned_term_idx"]
 
 [dependencies]
 datafusion = {path="../arrow-datafusion/datafusion/core", features=["simd"]}
@@ -21,3 +23,4 @@ futures = "0.3"
 rayon = "1.7"
 chrono = "0.4"
 parking_lot = "0.12"
+packed_simd_2 = "0.3.8"

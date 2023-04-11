@@ -1,3 +1,6 @@
+
+#![feature(portable_simd)]
+#![feature(stdsimd)]
 extern crate datafusion;
 
 pub mod utils;
@@ -5,6 +8,7 @@ pub mod index;
 pub mod datasources;
 pub mod query;
 pub mod context;
+pub mod batch;
 pub use utils::Result;
 pub use context::BooleanContext;
 
