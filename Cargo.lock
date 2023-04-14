@@ -908,6 +908,7 @@ dependencies = [
  "datafusion",
  "failure",
  "futures",
+ "learned_term_idx",
  "packed_simd_2",
  "parking_lot",
  "rand",

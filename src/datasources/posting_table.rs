@@ -7,26 +7,27 @@ use datafusion::{
     logical_expr::TableType, execution::context::SessionState, prelude::{Expr}, error::{Result, DataFusionError}, 
     physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, common, project_schema, RecordBatchStream}};
 use futures::Stream;
+use learned_term_idx::TermIdx;
+
+use crate::batch::PostingBatch;
+
+pub struct TermMeta {
+    distribution: Vec<u16>,
+}
 
 pub struct PostingTable {
     schema: SchemaRef,
-    field_map: Arc<HashMap<String, usize>>,
-    postings: Vec<Vec<RecordBatch>>,
+    term_idx: Arc<TermIdx<TermMeta>>,
+    postings: Vec<Vec<PostingBatch>>,
 }
 
 impl PostingTable {
-    pub fn new(schema: SchemaRef, batches: Vec<Vec<RecordBatch>>) -> Self {
+    pub fn new(schema: SchemaRef, term_idx: Arc<TermIdx<TermMeta>>, batches: Vec<Vec<PostingBatch>>) -> Self {
         // construct field map to index the position of the fields in schema
-        let mut field_map = HashMap::new();
-        schema.fields()
-        .into_iter().enumerate()
-        .for_each(|(i, v)| {
-            field_map.insert(v.name().clone(), i);
-        });
         Self {
             schema,
-            field_map: Arc::new(field_map),
-            postings: batches
+            term_idx,
+            postings: batches,
         }
     }
 }
@@ -55,7 +56,7 @@ impl TableProvider for PostingTable {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(PostingExec::try_new(
             &self.postings.clone(), 
-            self.field_map.clone(),
+            self.term_idx.clone(),
             self.schema(), 
             projection.cloned()
         )?))
@@ -63,9 +64,9 @@ impl TableProvider for PostingTable {
 }
 
 pub struct PostingExec {
-    partitions: Vec<Vec<RecordBatch>>,
+    partitions: Vec<Vec<PostingBatch>>,
     schema: SchemaRef,
-    field_map: Arc<HashMap<String, usize>>,
+    term_idx: Arc<TermIdx<TermMeta>>,
     projected_schema: SchemaRef,
     projection: Option<Vec<usize>>,
 }
@@ -142,26 +143,30 @@ impl ExecutionPlan for PostingExec {
         }
     }
 
-    /// We recompute the statistics dynamically from the arrow metadata as it is pretty cheap to do so
     fn statistics(&self) -> datafusion::physical_plan::Statistics {
-        common::compute_record_batch_statistics(
-            &self.partitions, &self.schema, self.projection.clone())
+        todo!()
     }
+
+    // We recompute the statistics dynamically from the arrow metadata as it is pretty cheap to do so
+    // fn statistics(&self) -> datafusion::physical_plan::Statistics {
+    //     common::compute_record_batch_statistics(
+    //         &self.partitions, &self.schema, self.projection.clone())
+    // }
 }
 
 impl PostingExec {
     /// Create a new execution plan for reading in-memory record batches
     /// The provided `schema` shuold not have the projection applied.
     pub fn try_new(
-        partitions: &[Vec<RecordBatch>],
-        field_map: Arc<HashMap<String, usize>>,
+        partitions: &[Vec<PostingBatch>],
+        term_idx: Arc<TermIdx<TermMeta>>,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
         Ok(Self {
             partitions: partitions.to_vec(),
-            field_map,
+            term_idx,
             schema,
             projected_schema,
             projection
@@ -171,7 +176,7 @@ impl PostingExec {
 
 pub struct PostingStream {
     /// Vector of recorcd batches
-    data: Vec<RecordBatch>,
+    data: Vec<PostingBatch>,
     /// Schema representing the data
     schema: SchemaRef,
     /// Optional projection for which columns to load
@@ -183,7 +188,7 @@ pub struct PostingStream {
 impl PostingStream {
     /// Create an iterator for a vector of record batches
     pub fn try_new(
-        data: Vec<RecordBatch>,
+        data: Vec<PostingBatch>,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
@@ -206,8 +211,8 @@ impl Stream for PostingStream {
 
         // return just the columns requested
         let batch = match self.projection.as_ref() {
-            Some(columns) => batch.project(columns)?,
-            None => batch.clone()
+            Some(columns) => batch.project_fold(columns).map_err(|e| DataFusionError::Execution(e.to_string()))?,
+            None => unreachable!("must have projection")
         };
         Some(Ok(batch))
        } else {

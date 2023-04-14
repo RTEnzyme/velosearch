@@ -6,7 +6,7 @@ use datafusion::{
     prelude::SessionConfig, sql::TableReference, logical_expr::LogicalPlanBuilder, 
     datasource::{provider_as_source, TableProvider}, error::DataFusionError, 
     optimizer::{OptimizerRule, rewrite_disjunctive_predicate::RewriteDisjunctivePredicate, push_down_projection::PushDownProjection}, 
-    physical_optimizer::{coalesce_batches::CoalesceBatches, pipeline_checker::PipelineChecker, PhysicalOptimizerRule, repartition::Repartition, dist_enforcement::EnforceDistribution}, scalar::ScalarValue
+    physical_optimizer::PhysicalOptimizerRule, scalar::ScalarValue
 };
 use parking_lot::RwLock;
 

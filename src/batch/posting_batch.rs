@@ -1,14 +1,24 @@
-use std::{sync::Arc, ops::Index};
+use std::{sync::{Arc, RwLock}, ops::Index, collections::HashMap};
 
-use datafusion::{arrow::{datatypes::SchemaRef, array::{UInt32Array, UInt16Array}}, from_slice::FromSlice};
+use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef}, record_batch::RecordBatch}};
 use crate::utils::{Result, FastErr};
 
 /// 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BatchRange {
-    start: usize, 
-    end: usize,
-    nums32: usize,
+    start: u32, 
+    end: u32,
+    nums32: u32,
+}
+
+impl BatchRange {
+    pub fn new(start: u32, end: u32) -> Self {
+        Self {
+            start,
+            end,
+            nums32: (end - start + 31) / 32
+        }
+    }
 }
 
 pub type PostingList = Arc<UInt16Array>;
@@ -73,29 +83,28 @@ impl PostingBatch {
         )
     }
 
-    pub fn project_fold(&self, indices: &[usize]) -> Result<Vec<PostingMask>> {
-        // let projected_schema = self.schema.project(indices)?;
+    pub fn project_fold(&self, indices: &[usize]) -> Result<RecordBatch> {
+        let projected_schema = self.schema.project(indices)?;
         let bitmask_size = self.range.nums32;
-        indices
+        let mut batches: Vec<ArrayRef> = Vec::with_capacity(indices.len());
+        for idx in indices {
+            let mut bitmask = vec![0 as u32; bitmask_size as usize];
+            let posting = self.postings.get(*idx).cloned().ok_or_else(|| {
+                FastErr::InternalErr(format!(
+                    "project index {} out of bounds, max field {}",
+                    *idx,
+                    self.postings.len()
+                ))
+            })?;
+            posting.values()
             .iter()
-            .map(|f| {
-                let mut bitmask = vec![0 as u32; bitmask_size];
-                self.postings.get(*f).cloned().ok_or_else(|| {
-                    FastErr::InternalErr(format!(
-                        "project index {} out of bounds, max field {}",
-                        f,
-                        self.postings.len()
-                    ))
-                }).and_then(|f| {
-                    let posting = f.values();
-                    posting.into_iter()
-                    .for_each(|v| {
-                        let offset = (*v >> 6) as usize;
-                        bitmask[offset] |= 1 << (31 - *v % 32)
-                    });
-                    Ok(Arc::new(UInt32Array::from_slice(bitmask.as_slice())))
-                })
-            }).collect()
+            .for_each(|v| {
+                let offset = (*v >> 6) as usize;
+                bitmask[offset] |= 1 << (31 - *v %32)
+            });
+            batches.push(Arc::new(UInt32Array::from(bitmask)));
+        }
+        Ok(RecordBatch::try_new(Arc::new(projected_schema), batches)?)
     }
 
     pub fn schema(&self) -> TermSchemaRef {
@@ -134,11 +143,66 @@ impl Index<&str> for PostingBatch {
     }
 }
 
+pub struct PostringBatchBuilder {
+    start: u32,
+    current: u32,
+    term_dict: RwLock<HashMap<String, Vec<u16>>>,
+}
+
+impl PostringBatchBuilder {
+    pub fn new(start: u32) -> Self {
+        Self { 
+            start,
+            current: start,
+            term_dict: RwLock::new(HashMap::new())
+        }
+    }
+
+    pub fn push_term(&mut self, term: String, doc_id: u32) -> Result<()> {
+        self.term_dict
+            .get_mut()
+            .map_err(|_| FastErr::InternalErr("Can't acquire the RwLock correctly".to_string()))?
+            .entry(term)
+            .or_insert(Vec::new())
+            .push((doc_id - self.start) as u16);
+        self.current = doc_id;
+        Ok(())
+    }
+
+    pub fn push_terms(&mut self, terms: Vec<String>, doc_id: u32) -> Result<()> {
+        let term_dict = self.term_dict.get_mut().map_err(|e| {
+            FastErr::InternalErr("Can't acquire the RwLock correctly".to_string())
+        })?;
+        let doc_id = (doc_id - self.start) as u16;
+        terms.into_iter()
+        .for_each(|v| term_dict.entry(v).or_insert(Vec::new()).push(doc_id));
+        Ok(())
+    }
+
+    pub fn build_single(self) -> Result<PostingBatch> {
+        let term_dict = self.term_dict
+            .into_inner()
+            .expect("Can't acquire the RwLock correctly");
+        let mut schema_list = Vec::new();
+        let mut postings = Vec::new();
+        term_dict
+            .into_iter()
+            .for_each(|(k, v)| {
+                schema_list.push(Field::new(k, DataType::UInt32, false));
+                postings.push(Arc::new(UInt16Array::from(v)));
+            });
+       PostingBatch::try_new(
+            Arc::new(Schema::new(schema_list)),
+            postings,
+            Arc::new(BatchRange::new(self.start, self.current + 1)))
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::{arch::x86_64::{ __m512i, _mm512_sllv_epi32}, simd::Simd, sync::Arc};
 
-    use datafusion::{arrow::{datatypes::{Schema, Field, DataType}, array::UInt16Array}, from_slice::FromSlice};
+    use datafusion::{arrow::{datatypes::{Schema, Field, DataType}, array::{UInt16Array}}, from_slice::FromSlice, common::cast::as_uint32_array};
 
     use super::{BatchRange, PostingBatch};
 
@@ -164,10 +228,10 @@ mod test {
 
     fn build_batch() -> PostingBatch {
         let schema = Arc::new(Schema::new(vec![
-            Field::new("test1", DataType::UInt16, true),
-            Field::new("test2", DataType::UInt16, true),
-            Field::new("test3", DataType::UInt16, true),
-            Field::new("test4", DataType::UInt16, true)
+            Field::new("test1", DataType::UInt32, true),
+            Field::new("test2", DataType::UInt32, true),
+            Field::new("test3", DataType::UInt32, true),
+            Field::new("test4", DataType::UInt32, true)
         ]));
         let range = Arc::new(BatchRange {
             start: 0,
@@ -188,10 +252,12 @@ mod test {
         let batch = build_batch();
         let res = batch.project_fold(&[1, 2]).unwrap();
         let expected = vec![0x88008000 as u32, 0x0a800000 as u32];
-        res.into_iter()
+        res.columns()
+        .into_iter()
         .enumerate()
         .for_each(|(i, v)| {
-            assert_eq!(v.value(0), expected[i], "Round{}: real: {:#b}, expected: {:#b}", i, v.value(0), expected[i])
+            let arr = as_uint32_array(v).expect("can't downcast to UInt32Array");
+            assert_eq!(arr.value(0), expected[i], "Round{}: real: {:#b}, expected: {:#b}", i, arr.value(0), expected[i])
         });
     }
 }
