@@ -19,6 +19,10 @@ impl BatchRange {
             nums32: (end - start + 31) / 32
         }
     }
+    
+    pub fn end(&self) -> u32 {
+        self.end
+    }
 }
 
 pub type PostingList = Arc<UInt16Array>;
@@ -143,13 +147,13 @@ impl Index<&str> for PostingBatch {
     }
 }
 
-pub struct PostringBatchBuilder {
+pub struct PostingBatchBuilder {
     start: u32,
     current: u32,
     term_dict: RwLock<HashMap<String, Vec<u16>>>,
 }
 
-impl PostringBatchBuilder {
+impl PostingBatchBuilder {
     pub fn new(start: u32) -> Self {
         Self { 
             start,

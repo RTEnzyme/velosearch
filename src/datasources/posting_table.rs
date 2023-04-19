@@ -1,33 +1,45 @@
-use std::{collections::HashMap, any::Any, sync::Arc, task::Poll};
+use std::{any::Any, sync::Arc, task::Poll};
 
 use async_trait::async_trait;
 use datafusion::{
-    arrow::{datatypes::SchemaRef, record_batch::RecordBatch}, 
+    arrow::{datatypes::{SchemaRef, Schema, Field, DataType}, record_batch::RecordBatch, array::BooleanArray}, 
     datasource::TableProvider, 
-    logical_expr::TableType, execution::context::SessionState, prelude::{Expr}, error::{Result, DataFusionError}, 
-    physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, common, project_schema, RecordBatchStream}};
+    logical_expr::TableType, execution::context::SessionState, prelude::Expr, error::{Result, DataFusionError}, 
+    physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream}};
 use futures::Stream;
 use learned_term_idx::TermIdx;
 
-use crate::batch::PostingBatch;
+use crate::batch::{PostingBatch, PostingBatchBuilder, BatchRange};
 
 pub struct TermMeta {
-    distribution: Vec<u16>,
+    /// Which horizantal partition batches has this Term
+    distribution: BooleanArray,
+    /// Witch Batch has this Term
+    index: Vec<(u16, u16)>,
+    /// The number of this Term
+    nums: u32,
 }
 
 pub struct PostingTable {
     schema: SchemaRef,
     term_idx: Arc<TermIdx<TermMeta>>,
     postings: Vec<Vec<PostingBatch>>,
+    batch_builder: PostingBatchBuilder,
 }
 
 impl PostingTable {
-    pub fn new(schema: SchemaRef, term_idx: Arc<TermIdx<TermMeta>>, batches: Vec<Vec<PostingBatch>>) -> Self {
+    pub fn new(
+        schema: SchemaRef,
+        term_idx: Arc<TermIdx<TermMeta>>,
+        batches: Vec<Vec<PostingBatch>>,
+        range: &BatchRange,
+    ) -> Self {
         // construct field map to index the position of the fields in schema
         Self {
             schema,
             term_idx,
             postings: batches,
+            batch_builder: PostingBatchBuilder::new(range.end()),
         }
     }
 }
@@ -231,3 +243,93 @@ impl RecordBatchStream for PostingStream {
         self.schema.clone()
     }
 }
+
+pub fn make_posting_schema(fields: Vec<&str>) -> Schema {
+    Schema::new(
+        fields.into_iter()
+        .map(|f| Field::new(f, DataType::UInt32, false))
+        .collect()
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::{prelude::SessionContext, arrow::array::{UInt16Array, UInt32Array}, from_slice::FromSlice, common::cast::as_uint32_array};
+    use futures::StreamExt;
+
+    use super::*;
+
+    fn create_posting_table() -> (Arc<Schema>, Arc<BatchRange>, PostingTable) {
+        let schema = Arc::new(make_posting_schema(vec!["a", "b", "c", "d"]));
+        let range = Arc::new(BatchRange::new(0, 20));
+
+        let batch = PostingBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(UInt16Array::from_slice([1, 2, 6, 8, 15])),
+                Arc::new(UInt16Array::from_slice([0, 4, 9, 13, 17])),
+                Arc::new(UInt16Array::from_slice([3, 7, 11, 17, 19])),
+                Arc::new(UInt16Array::from_slice([6, 7, 9, 14, 18]))
+            ],
+            range.clone()
+        ).expect("Can't try new a PostingBatch");
+
+        let term_idx = Arc::new(TermIdx::new());
+        let provider = PostingTable::new(
+                schema.clone(),
+                term_idx,
+                vec![vec![batch]],
+                &range
+            );
+        return (schema, range, provider)
+    }
+
+    #[tokio::test]
+    async fn test_with_projection() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+        let (_, _, provider) = create_posting_table();
+
+        let exec = provider
+            .scan(&session_ctx.state(), Some(&vec![1, 2]), &[], None)
+            .await?;
+
+        let mut it = exec.execute(0, task_ctx)?;
+        let batch2 = it.next().await.unwrap()?;
+        assert_eq!(2, batch2.schema().fields().len());
+        assert_eq!("b", batch2.schema().field(0).name());
+        assert_eq!("c", batch2.schema().field(1).name());
+        assert_eq!(2, batch2.num_columns());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_exec_fold() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+        let (_, _, provider) = create_posting_table();
+
+        let exec = provider
+            .scan(&session_ctx.state(), Some(&vec![0, 3]), &[], None)
+            .await?;
+
+        let mut it = exec.execute(0, task_ctx)?;
+        let res_batch: RecordBatch = it.next().await.unwrap()?;
+        assert_eq!(2, res_batch.schema().fields().len());
+
+        let target_res = vec![
+            // 1, 2, 6, 8, 15
+            UInt32Array::from_slice([0x62810000 as u32]),
+            // 6, 7, 9, 14, 18]
+            UInt32Array::from_slice([0x03422000 as u32]),
+        ];
+        res_batch.columns()
+        .into_iter()
+        .enumerate()
+        .for_each(|(i, v)| {
+            assert_eq!(&target_res[i], as_uint32_array(v).expect("Can't cast to UIn32Array"));
+        });
+
+        Ok(())
+    }
+} 
