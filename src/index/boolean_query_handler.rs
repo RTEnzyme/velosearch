@@ -114,7 +114,7 @@ impl HandlerT for BooleanQueryHandler {
         let mut handlers = Vec::with_capacity(50);
         let time = Instant::now();
         let mut cnt = 0;
-        for x in 0..1 {
+        for _ in 0..1 {
             let keys = test_iter.by_ref().take(2).collect::<Vec<String>>();
             if keys[1] == keys[0] {
                 continue

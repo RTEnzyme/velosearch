@@ -88,9 +88,15 @@ impl PostingBatch {
     }
 
     pub fn project_fold(&self, indices: &[usize]) -> Result<RecordBatch> {
-        let projected_schema = self.schema.project(indices)?;
+        let mut projected_fields: Vec<Field> = indices
+            .into_iter()
+            .map(|f| {
+                self.schema.fields.get(*f).cloned().unwrap()
+            }).collect();
+        projected_fields.push(Field::new("__id__", DataType::UInt32, false));
+        let projected_schema = Schema::new(projected_fields);
         let bitmask_size = self.range.nums32;
-        let mut batches: Vec<ArrayRef> = Vec::with_capacity(indices.len());
+        let mut batches: Vec<ArrayRef> = Vec::with_capacity(indices.len() + 1);
         for idx in indices {
             let mut bitmask = vec![0 as u32; bitmask_size as usize];
             let posting = self.postings.get(*idx).cloned().ok_or_else(|| {
@@ -108,6 +114,7 @@ impl PostingBatch {
             });
             batches.push(Arc::new(UInt32Array::from(bitmask)));
         }
+        batches.push(Arc::new(UInt32Array::from_iter_values((self.range.start).. (self.range.start + 32 * self.range.nums32))));
         Ok(RecordBatch::try_new(Arc::new(projected_schema), batches)?)
     }
 

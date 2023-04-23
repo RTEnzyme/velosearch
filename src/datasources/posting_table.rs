@@ -254,8 +254,10 @@ pub fn make_posting_schema(fields: Vec<&str>) -> Schema {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::{prelude::SessionContext, arrow::array::{UInt16Array, UInt32Array}, from_slice::FromSlice, common::cast::as_uint32_array};
+    use datafusion::{prelude::{SessionContext}, arrow::array::{UInt16Array, UInt32Array}, from_slice::FromSlice, common::cast::as_uint32_array, physical_plan::{expressions::col, PhysicalExpr, filter::FilterExec, common::collect}, logical_expr::Operator};
     use futures::StreamExt;
+    use datafusion::physical_expr::expressions::{boolean_query, lit};
+    use tracing::Level;
 
     use super::*;
 
@@ -330,6 +332,53 @@ mod tests {
             assert_eq!(&target_res[i], as_uint32_array(v).expect("Can't cast to UIn32Array"));
         });
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn simple_boolean_query_without_optimizer() -> Result<()> {
+        tracing_subscriber::fmt().with_max_level(Level::DEBUG).init();
+        let schema = Arc::new(make_posting_schema(vec!["a", "b", "c", "d"]));
+        let range = Arc::new(BatchRange::new(0, 20));
+
+        let batch = PostingBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(UInt16Array::from_slice([1, 2, 6, 8, 15])),
+                Arc::new(UInt16Array::from_slice([0, 4, 9, 13, 17])),
+                Arc::new(UInt16Array::from_slice([3, 7, 11, 17, 19])),
+                Arc::new(UInt16Array::from_slice([6, 7, 9, 14, 18]))
+            ],
+            range.clone()
+        ).expect("Can't try new a PostingBatch");
+
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+        let input = Arc::new(PostingExec::try_new(
+            &[vec![batch]], 
+            Arc::new(TermIdx::new()), 
+            schema.clone(), 
+            Some(vec![1, 2]),
+        ).unwrap());
+
+        let predicate: Arc<dyn PhysicalExpr> = 
+            boolean_query(
+                boolean_query(
+                    col("a", &schema.clone())?,
+                    Operator::BitwiseAnd,
+                    col("b", &schema)?,
+                    &schema
+                )?,
+                Operator::BitwiseAnd,
+                    lit(1 as u32),
+                    &schema,
+            ).unwrap();
+        
+        let filter: Arc<dyn ExecutionPlan> = 
+            Arc::new(FilterExec::try_new(predicate, input).unwrap());
+        
+        let stream = filter.execute(0, task_ctx).unwrap();
+        println!("{:?}", collect(stream).await.unwrap()[0]);
         Ok(())
     }
 } 
