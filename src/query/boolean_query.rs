@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::{
-    prelude::{binary_expr, col, lit, Expr}, 
+    prelude::{col, lit, Expr, boolean_or, boolean_and}, 
     logical_expr::{Operator, LogicalPlan, LogicalPlanBuilder}, 
     execution::context::{SessionState, TaskContext}, 
     error::DataFusionError, 
@@ -35,9 +35,9 @@ impl BooleanPredicateBuilder {
         if terms.len() <= 1 {
             return Err(DataFusionError::Internal("The param of terms should at least two items".to_string()).into())
         }
-        let mut predicate = bitwise_and(col(*terms.next().unwrap()), col(*terms.next().unwrap()));
+        let mut predicate = boolean_and(col(*terms.next().unwrap()), col(*terms.next().unwrap()));
         for &expr in terms {
-            predicate = bitwise_and(predicate, col(expr));
+            predicate = boolean_and(predicate, col(expr));
         }
         Ok(BooleanPredicateBuilder {
             predicate
@@ -46,7 +46,7 @@ impl BooleanPredicateBuilder {
 
     pub fn with_must(self, right: BooleanPredicateBuilder) -> Result<Self> {
         Ok(BooleanPredicateBuilder { 
-            predicate: bitwise_and(self.predicate, right.predicate)
+            predicate: boolean_and(self.predicate, right.predicate)
         })
     }
 
@@ -55,9 +55,9 @@ impl BooleanPredicateBuilder {
         if terms.len() <= 1 {
             return Err(DataFusionError::Internal("The param of terms should at least two items".to_string()).into())
         }
-        let mut predicate = bitwise_or(col(*terms.next().unwrap()), col(*terms.next().unwrap()));
+        let mut predicate = boolean_or(col(*terms.next().unwrap()), col(*terms.next().unwrap()));
         for &expr in terms {
-            predicate = bitwise_or(predicate, col(expr));
+            predicate = boolean_or(predicate, col(expr));
         }
         Ok(BooleanPredicateBuilder { 
             predicate: predicate
@@ -66,12 +66,12 @@ impl BooleanPredicateBuilder {
 
     pub fn with_should(self, right: BooleanPredicateBuilder) -> Result<Self> {
         Ok(BooleanPredicateBuilder {
-            predicate: bitwise_or(self.predicate, right.predicate)
+            predicate: boolean_or(self.predicate, right.predicate)
         })
     }
 
     pub fn build(self) -> Expr {
-        self.predicate.eq(lit(1 as i8))
+        boolean_and(self.predicate, lit(1 as u32))
     }
 
     // pub fn with_must_not(self) -> result<BooleanPredicateBuilder> {
@@ -100,12 +100,13 @@ impl BooleanQuery {
 
     /// Create BooleanQuery based on a bitwise binary operation expression
     pub fn boolean_predicate(self, predicate: Expr) -> Result<Self> {
-        let project_exprs = binary_expr_columns(&predicate);
+        let mut project_exprs = binary_expr_columns(&predicate);
+        project_exprs.push(col("__id__"));
         match predicate {
-            Expr::BinaryExpr(expr) => {
+            Expr::BooleanQuery(expr) => {
                 let project_plan = LogicalPlanBuilder::from(self.plan).project(project_exprs)?.build()?;
                 Ok(Self {
-                plan: LogicalPlanBuilder::from(project_plan).filter(Expr::BinaryExpr(expr))?.build()?,
+                plan: LogicalPlanBuilder::from(project_plan).boolean(Expr::BooleanQuery(expr))?.build()?,
                 session_state: self.session_state 
             })
             },
@@ -156,22 +157,10 @@ impl BooleanQuery {
 
 }
 
-fn bitwise_and(left: Expr, right: Expr) -> Expr {
-    binary_expr(left, Operator::BitwiseAnd, right)
-}
-
-fn bitwise_or(left: Expr, right: Expr) -> Expr {
-    binary_expr(left, Operator::BitwiseOr, right)
-}
-
-// fn bitwise_xor(left: Expr, right: Expr) -> Expr {
-//     binary_expr(left, Operator::BitwiseXor, right)
-// }
-
 fn binary_expr_columns(be: &Expr) -> Vec<Expr> {
     debug!("Binary expr columns: {:?}", be);
     match be {
-        Expr::BinaryExpr(b) => {
+        Expr::BooleanQuery(b) => {
             let mut left_columns = binary_expr_columns(&b.left);
             left_columns.extend(binary_expr_columns(&b.right));
             left_columns
@@ -187,9 +176,17 @@ fn binary_expr_columns(be: &Expr) -> Vec<Expr> {
 
 #[cfg(test)]
 pub mod tests {
-    use datafusion::prelude::col;
+    use std::sync::Arc;
+    use std::time::Instant;
 
-    use crate::utils::Result;
+    use datafusion::arrow::array::UInt16Array;
+    use datafusion::arrow::datatypes::{Schema, Field, DataType};
+    use datafusion::from_slice::FromSlice;
+    use datafusion::prelude::col;
+    use learned_term_idx::TermIdx;
+    use tracing::Level;
+    use crate::batch::{BatchRange, PostingBatch};
+    use crate::{utils::Result, BooleanContext, datasources::posting_table::PostingTable};
 
     use super::{BooleanPredicateBuilder, binary_expr_columns};
 
@@ -211,6 +208,49 @@ pub mod tests {
     fn binary_expr_children_test() -> Result<()> {
         let predicate = BooleanPredicateBuilder::should(&["a", "b", "c"])?;
         assert_eq!(binary_expr_columns(&predicate.build()), vec![col("a"), col("b"), col("c")]);
+        Ok(())
+    }
+
+    pub fn make_posting_schema(fields: Vec<&str>) -> Schema {
+        Schema::new(
+            fields.into_iter()
+            .map(|f| Field::new(f, DataType::UInt32, false))
+            .collect()
+        )
+    }
+
+    #[tokio::test]
+    async fn simple_query() -> Result<()> {
+        tracing_subscriber::fmt().with_max_level(Level::DEBUG).init();
+        let schema = Arc::new(make_posting_schema(vec!["__id__", "a", "b", "c", "d"]));
+        let range = Arc::new(BatchRange::new(0, 20));
+
+        let batch = PostingBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(UInt16Array::from_iter_values((0..32).into_iter())),
+                Arc::new(UInt16Array::from_slice([0, 2, 6, 8, 15])),
+                Arc::new(UInt16Array::from_slice([0, 4, 6, 13, 17])),
+                Arc::new(UInt16Array::from_slice([3, 7, 11, 17, 19])),
+                Arc::new(UInt16Array::from_slice([6, 7, 9, 14, 18]))
+            ],
+            range.clone()
+        ).expect("Can't try new a PostingBatch");
+
+        let session_ctx = BooleanContext::new();
+        session_ctx.register_index("t", Arc::new(PostingTable::new(
+            schema.clone(),
+            Arc::new(TermIdx::new()),
+            vec![vec![batch]],
+            &BatchRange::new(0, 20)
+        ))).unwrap();
+
+        let index = session_ctx.index("t").await.unwrap();
+        let t = Instant::now();
+        index.boolean_predicate(BooleanPredicateBuilder::must(&["a", "b"]).unwrap().build()).unwrap()
+            .show().await.unwrap();
+        println!("{}", t.elapsed().as_nanos());
+        panic!("");
         Ok(())
     }
 }

@@ -9,7 +9,7 @@ use datafusion::{
 use futures::Stream;
 use learned_term_idx::TermIdx;
 
-use crate::batch::{PostingBatch, PostingBatchBuilder, BatchRange};
+use crate::batch::{PostingBatch, BatchRange, PostingBatchBuilder};
 
 pub struct TermMeta {
     /// Which horizantal partition batches has this Term
