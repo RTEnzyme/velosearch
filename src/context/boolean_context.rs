@@ -1,16 +1,17 @@
 use std::{sync::Arc};
 
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion::{
-    execution::{context::SessionState, runtime_env::RuntimeEnv}, 
-    prelude::SessionConfig, sql::TableReference, logical_expr::LogicalPlanBuilder, 
+    execution::{context::{SessionState, QueryPlanner}, runtime_env::RuntimeEnv}, 
+    prelude::SessionConfig, sql::TableReference, logical_expr::{LogicalPlanBuilder, LogicalPlan}, 
     datasource::{provider_as_source, TableProvider}, error::DataFusionError, 
     optimizer::{OptimizerRule, rewrite_disjunctive_predicate::RewriteDisjunctivePredicate, push_down_projection::PushDownProjection}, 
-    physical_optimizer::PhysicalOptimizerRule, scalar::ScalarValue
+    physical_optimizer::PhysicalOptimizerRule, scalar::ScalarValue, physical_plan::{PhysicalPlanner, ExecutionPlan}
 };
 use parking_lot::RwLock;
 
-use crate::{query::boolean_query::BooleanQuery, utils::FastErr};
+use crate::{query::boolean_query::BooleanQuery, utils::FastErr, BooleanPhysicalPlanner};
 use crate::utils::Result;
 
 #[derive(Clone)]
@@ -47,8 +48,10 @@ impl BooleanContext {
         let state = SessionState::with_config_rt(config, runtime);
         // Add custom optimizer rules
         let state = state.with_optimizer_rules(optimizer_rules());
-        // Add custom physical optimizer rulse
+        // Add custom physical optimizer rules
         let state = state.with_physical_optimizer_rules(physical_optimizer_rulse());
+        // Ad custom Physical Planner
+        let state = state.with_query_planner(Arc::new(BooleanPlanner {}));
         Self::with_state(state)
     }
 
@@ -154,4 +157,21 @@ fn physical_optimizer_rulse() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync
         // Arc::new(CoalesceBatches::new()),
         // Arc::new(PipelineChecker::new())
     ]
+}
+
+struct BooleanPlanner {}
+
+#[async_trait]
+impl QueryPlanner for BooleanPlanner {
+    /// Given a `LogicalPlan`, create an `ExecutionPlan` suitable for execution
+    async fn create_physical_plan(
+        &self,
+        logical_plan: &LogicalPlan,
+        session_state: &SessionState,
+    ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+        let planner = BooleanPhysicalPlanner::default();
+        planner
+            .create_physical_plan(logical_plan, session_state)
+            .await
+    }
 }

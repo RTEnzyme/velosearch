@@ -5,7 +5,6 @@ use datafusion::{physical_plan::{PhysicalPlanner, ExecutionPlan, PhysicalExpr, e
 use futures::{future::BoxFuture, FutureExt};
 use tracing::{debug, trace};
 
-
 /// Boolean physical query planner that converts a
 /// `LogicalPlan` to an `ExecutionPlan` suitable for execution.
 #[derive(Default)]
