@@ -5,24 +5,16 @@ use datafusion::{
     arrow::{datatypes::{SchemaRef, Schema, Field, DataType}, record_batch::RecordBatch, array::BooleanArray}, 
     datasource::TableProvider, 
     logical_expr::TableType, execution::context::SessionState, prelude::Expr, error::{Result, DataFusionError}, 
-    physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream}};
+    physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream, boolean::TermMeta}};
 use futures::Stream;
 use learned_term_idx::TermIdx;
 
 use crate::batch::{PostingBatch, BatchRange, PostingBatchBuilder};
 
-pub struct TermMeta {
-    /// Which horizantal partition batches has this Term
-    distribution: BooleanArray,
-    /// Witch Batch has this Term
-    index: Vec<(u16, u16)>,
-    /// The number of this Term
-    nums: u32,
-}
 
 pub struct PostingTable {
     schema: SchemaRef,
-    term_idx: Arc<TermIdx<TermMeta>>,
+    term_idx: Vec<Arc<TermIdx<TermMeta>>>,
     postings: Vec<Vec<PostingBatch>>,
     batch_builder: PostingBatchBuilder,
 }
@@ -30,7 +22,7 @@ pub struct PostingTable {
 impl PostingTable {
     pub fn new(
         schema: SchemaRef,
-        term_idx: Arc<TermIdx<TermMeta>>,
+        term_idx: Vec<Arc<TermIdx<TermMeta>>>,
         batches: Vec<Vec<PostingBatch>>,
         range: &BatchRange,
     ) -> Self {
@@ -41,6 +33,18 @@ impl PostingTable {
             postings: batches,
             batch_builder: PostingBatchBuilder::new(range.end()),
         }
+    }
+
+    #[inline]
+    pub fn stat_of(&self, term_name: &str, partition: usize) -> Option<TermMeta> {
+        self.term_idx[partition].get(term_name).cloned()
+    }
+
+    pub fn stats_of(&self, term_names: &[&str], partition: usize) -> Vec<Option<TermMeta>> {
+        term_names
+            .into_iter()
+            .map(|v| self.stat_of(v, partition))
+            .collect()
     }
 }
 
@@ -78,7 +82,7 @@ impl TableProvider for PostingTable {
 pub struct PostingExec {
     partitions: Vec<Vec<PostingBatch>>,
     schema: SchemaRef,
-    term_idx: Arc<TermIdx<TermMeta>>,
+    term_idx: Vec<Arc<TermIdx<TermMeta>>>,
     projected_schema: SchemaRef,
     projection: Option<Vec<usize>>,
 }
@@ -171,7 +175,7 @@ impl PostingExec {
     /// The provided `schema` shuold not have the projection applied.
     pub fn try_new(
         partitions: &[Vec<PostingBatch>],
-        term_idx: Arc<TermIdx<TermMeta>>,
+        term_idx: Vec<Arc<TermIdx<TermMeta>>>,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
@@ -183,6 +187,17 @@ impl PostingExec {
             projected_schema,
             projection
         })
+    }
+
+    /// Get TermMeta From &[&str]
+    pub fn term_metas_of(&self, terms: &[&str], partition: usize) -> Vec<Option<TermMeta>> {
+        let term_idx = self.term_idx[partition].clone();
+        terms
+            .into_iter()
+            .map(|&t| {
+                term_idx.get(t).cloned()
+            })
+            .collect()
     }
 }
 
@@ -276,7 +291,7 @@ mod tests {
             range.clone()
         ).expect("Can't try new a PostingBatch");
 
-        let term_idx = Arc::new(TermIdx::new());
+        let term_idx = vec![Arc::new(TermIdx::new())];
         let provider = PostingTable::new(
                 schema.clone(),
                 term_idx,
@@ -356,7 +371,7 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let input = Arc::new(PostingExec::try_new(
             &[vec![batch]], 
-            Arc::new(TermIdx::new()), 
+            vec![Arc::new(TermIdx::new())], 
             schema.clone(), 
             Some(vec![1, 2]),
         ).unwrap());

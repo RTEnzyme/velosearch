@@ -240,7 +240,7 @@ pub mod tests {
         let session_ctx = BooleanContext::new();
         session_ctx.register_index("t", Arc::new(PostingTable::new(
             schema.clone(),
-            Arc::new(TermIdx::new()),
+            vec![Arc::new(TermIdx::new())],
             vec![vec![batch]],
             &BatchRange::new(0, 20)
         ))).unwrap();
