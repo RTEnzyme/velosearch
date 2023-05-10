@@ -71,20 +71,22 @@ impl TableProvider for PostingTable {
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(PostingExec::try_new(
-            &self.postings.clone(), 
+            self.postings.clone(), 
             self.term_idx.clone(),
             self.schema(), 
-            projection.cloned()
+            projection.cloned(),
+            None
         )?))
     }
 }
 
 pub struct PostingExec {
-    partitions: Vec<Vec<PostingBatch>>,
-    schema: SchemaRef,
-    term_idx: Vec<Arc<TermIdx<TermMeta>>>,
-    projected_schema: SchemaRef,
-    projection: Option<Vec<usize>>,
+    pub partitions: Vec<Vec<PostingBatch>>,
+    pub schema: SchemaRef,
+    pub term_idx: Vec<Arc<TermIdx<TermMeta>>>,
+    pub projected_schema: SchemaRef,
+    pub projection: Option<Vec<usize>>,
+    pub partition_min_range: Option<Vec<BooleanArray>>,
 }
 
 impl std::fmt::Debug for PostingExec {
@@ -174,29 +176,32 @@ impl PostingExec {
     /// Create a new execution plan for reading in-memory record batches
     /// The provided `schema` shuold not have the projection applied.
     pub fn try_new(
-        partitions: &[Vec<PostingBatch>],
+        partitions: Vec<Vec<PostingBatch>>,
         term_idx: Vec<Arc<TermIdx<TermMeta>>>,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
+        partition_min_range: Option<Vec<BooleanArray>>,
     ) -> Result<Self> {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
         Ok(Self {
-            partitions: partitions.to_vec(),
+            partitions: partitions,
             term_idx,
             schema,
             projected_schema,
-            projection
+            projection,
+            partition_min_range,
         })
     }
 
     /// Get TermMeta From &[&str]
-    pub fn term_metas_of(&self, terms: &[&str], partition: usize) -> Vec<Option<TermMeta>> {
+    pub fn term_metas_of(&self, terms: &[&str], partition: usize) -> Vec<TermMeta> {
         let term_idx = self.term_idx[partition].clone();
         terms
             .into_iter()
             .map(|&t| {
-                term_idx.get(t).cloned()
+                term_idx.get(t).expect(format!("Should have {} term meta", t).as_str())
             })
+            .cloned()
             .collect()
     }
 }
@@ -370,10 +375,11 @@ mod tests {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         let input = Arc::new(PostingExec::try_new(
-            &[vec![batch]], 
+            vec![vec![batch]], 
             vec![Arc::new(TermIdx::new())], 
             schema.clone(), 
             Some(vec![1, 2]),
+            None
         ).unwrap());
 
         let predicate: Arc<dyn PhysicalExpr> = 

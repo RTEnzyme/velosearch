@@ -1,7 +1,21 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::{physical_plan::{PhysicalPlanner, ExecutionPlan, PhysicalExpr, expressions::{Column, Literal, binary, boolean_query, self}, explain::ExplainExec, projection::ProjectionExec, boolean::BooleanExec, displayable}, execution::context::SessionState, error::{Result, DataFusionError}, logical_expr::{LogicalPlan, expr::BooleanQuery, BinaryExpr, PlanType, ToStringifiedPlan, Projection, TableScan, expr_rewriter::unnormalize_cols, StringifiedPlan}, common::DFSchema, arrow::datatypes::{Schema, SchemaRef}, prelude::Expr, physical_expr::execution_props::ExecutionProps, datasource::source_as_provider, optimizer::utils::unalias, physical_optimizer::PhysicalOptimizerRule};
+use datafusion::{
+    physical_plan::{
+        PhysicalPlanner, ExecutionPlan, PhysicalExpr, 
+        expressions::{Column, Literal, binary, self}, 
+        explain::ExplainExec, projection::ProjectionExec, boolean::BooleanExec, displayable}, 
+        execution::context::SessionState, error::{Result, DataFusionError}, 
+        logical_expr::{
+            LogicalPlan, expr::BooleanQuery, BinaryExpr, PlanType, ToStringifiedPlan, Projection, TableScan, expr_rewriter::unnormalize_cols, StringifiedPlan
+        },
+        physical_expr::boolean_query,
+        common::DFSchema, arrow::datatypes::{Schema, SchemaRef}, 
+        prelude::Expr, physical_expr::execution_props::ExecutionProps, datasource::source_as_provider, 
+        optimizer::utils::unalias, 
+        physical_optimizer::PhysicalOptimizerRule
+    };
 use futures::{future::BoxFuture, FutureExt};
 use tracing::{debug, trace};
 
