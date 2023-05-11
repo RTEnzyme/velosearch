@@ -5,7 +5,7 @@ pub fn add(left: usize, right: usize) -> usize {
 }
 
 pub struct TermIdx<T> {
-    term_map: HashMap<String, T>
+    pub term_map: HashMap<String, T>
 }
 
 impl<T> TermIdx<T> {
