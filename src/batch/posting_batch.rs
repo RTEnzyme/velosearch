@@ -23,6 +23,10 @@ impl BatchRange {
     pub fn end(&self) -> u32 {
         self.end
     }
+
+    pub fn len(&self) -> u32 {
+        self.end - self.start
+    }
 }
 
 pub type PostingList = Arc<UInt16Array>;

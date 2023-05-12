@@ -96,7 +96,25 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                         projected_schema.clone(),
                         range,
                     ).unwrap();
-                    self.predicate.as_ref().unwrap().eval(batch).unwrap()
+                    let eval = self.predicate.as_ref().unwrap().eval(batch).unwrap();
+                    eval
+                })
+                .collect();
+            let term_stats: Vec<Vec<TermMeta>> = term_stats
+                .into_iter()
+                .zip(partition_range.iter())
+                .enumerate()
+                .map(|(i, (s, d))| {
+                    let batch_size = posting.partitions[i][0].range().len();
+                    let selectivity = (d.true_count() / d.len()) as f64;
+                    s.into_iter()
+                    .zip(d.into_iter())
+                    .filter(|(_, b  )| b.unwrap())
+                    .map(|(mut s, _)| {
+                        s.selectivity = (s.nums as f64 * selectivity) /  batch_size as f64;
+                        s
+                    })
+                    .collect()
                 })
                 .collect();
             self.min_range = Some(partition_range);
@@ -145,9 +163,9 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
 mod tests {
     use std::{sync::Arc, collections::HashMap};
 
-    use datafusion::{arrow::{datatypes::{SchemaRef, Field, Schema, DataType}, record_batch::RecordBatch, array::{UInt16Array, BooleanArray}}, from_slice::FromSlice, physical_plan::{boolean::{TermMeta, BooleanExec}, expressions::{col, lit}, ExecutionPlan}, physical_expr::{BooleanQueryExpr, boolean_query}, logical_expr::Operator, physical_optimizer::PhysicalOptimizerRule, config::ConfigOptions};
+    use datafusion::{arrow::{datatypes::{SchemaRef, Field, Schema, DataType}, array::{UInt16Array, BooleanArray}}, from_slice::FromSlice, physical_plan::{boolean::{TermMeta, BooleanExec}, expressions::{col, lit}, ExecutionPlan}, physical_expr::boolean_query, logical_expr::Operator, physical_optimizer::PhysicalOptimizerRule, config::ConfigOptions};
     use learned_term_idx::TermIdx;
-    use tracing::Level;
+    use tracing::{Level, debug};
 
     use crate::{datasources::posting_table::PostingExec, batch::{PostingBatch, BatchRange}, MinOperationRange};
 
@@ -219,16 +237,16 @@ mod tests {
 
     fn posting_exec() -> Arc<PostingExec> {
         let term_idx1: HashMap<String, TermMeta> = vec![
-            ("a".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, false])), index: vec![], nums:4 }),
-            ("b".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, true])), index: vec![], nums: 6}),
-            ("c".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, false])), index: vec![], nums: 3}),
-            ("d".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, true])), index: vec![], nums: 6}),
+            ("a".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, false])), index: vec![], nums:4 , selectivity: 0.}),
+            ("b".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, true])), index: vec![], nums: 6, selectivity: 0.}),
+            ("c".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, false])), index: vec![], nums: 3, selectivity: 0.}),
+            ("d".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, true])), index: vec![], nums: 6, selectivity: 0.}),
         ].into_iter().collect();
         let term_idx2: HashMap<String, TermMeta> = vec![
-            ("a".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, false])), index: vec![], nums: 3}),
-            ("b".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, true])), index: vec![], nums: 5}),
-            ("c".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, true])), index: vec![], nums: 5}),
-            ("d".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, true])), index: vec![], nums: 5}),
+            ("a".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, false])), index: vec![], nums: 3, selectivity: 0.}),
+            ("b".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, true])), index: vec![], nums: 5, selectivity: 0.}),
+            ("c".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, true])), index: vec![], nums: 5, selectivity: 0.}),
+            ("d".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, true])), index: vec![], nums: 5, selectivity: 0.}),
         ].into_iter().collect();
         let term_idx = vec![Arc::new(TermIdx {term_map: term_idx1}), Arc::new(TermIdx {term_map: term_idx2})];
         Arc::new(PostingExec::try_new(
@@ -294,5 +312,6 @@ mod tests {
             .for_each(|(l, r)| {
                 assert_eq!(l, r)
             });
+        debug!("Final ExecutionPlan: {:?}", optimized_boolean);
     }
 }
