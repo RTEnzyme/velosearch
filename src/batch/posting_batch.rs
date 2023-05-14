@@ -190,7 +190,7 @@ impl PostingBatchBuilder {
     }
 
     pub fn push_terms(&mut self, terms: Vec<String>, doc_id: u32) -> Result<()> {
-        let term_dict = self.term_dict.get_mut().map_err(|e| {
+        let term_dict = self.term_dict.get_mut().map_err(|_| {
             FastErr::InternalErr("Can't acquire the RwLock correctly".to_string())
         })?;
         let doc_id = (doc_id - self.start) as u16;
@@ -222,7 +222,7 @@ impl PostingBatchBuilder {
 mod test {
     use std::{arch::x86_64::{ __m512i, _mm512_sllv_epi32}, simd::Simd, sync::Arc};
 
-    use datafusion::{arrow::{datatypes::{Schema, Field, DataType}, array::{UInt16Array, BooleanArray}}, from_slice::FromSlice, common::cast::as_uint32_array};
+    use datafusion::{arrow::{datatypes::{Schema, Field, DataType}, array::{UInt16Array, BooleanArray}}, from_slice::FromSlice};
 
     use super::{BatchRange, PostingBatch};
 

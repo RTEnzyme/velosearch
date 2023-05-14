@@ -431,3 +431,54 @@ impl<'a> CnfPredicate<'a> {
         self.predicates
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use core::panic;
+    use std::{unreachable, println, assert_eq, sync::Arc};
+
+    use datafusion::{prelude::{col, boolean_or, boolean_and, Expr}, common::{DFSchema, DFField}, arrow::datatypes::{Schema, Field, DataType}, physical_expr::execution_props::ExecutionProps, physical_plan::{expressions::Column, PhysicalExpr}};
+
+    use super::CnfPredicate;
+
+    #[test]
+    fn cnf_predicates_convert() {
+        let a = col("a");
+        let b = col("b");
+        let c = col("c");
+        let a_b = boolean_or(a, b);
+        let a_b_c = boolean_and(a_b, c);
+        if let Expr::BooleanQuery(boolean) = a_b_c {
+            let input_dfschema = DFSchema::new(
+                vec![
+                    DFField::new(None, "a", DataType::Boolean, false),
+                    DFField::new(None, "b", DataType::Boolean, false),
+                    DFField::new(None, "c", DataType::Boolean, false),
+                ]
+            ).unwrap();
+            let input_schema = Schema::new(
+                vec![
+                    Field::new("a", DataType::Boolean, false),
+                    Field::new("b", DataType::Boolean, false),
+                    Field::new("c", DataType::Boolean, false),
+                ]
+            );
+            let execution_props = ExecutionProps::new();
+            let mut cnf = CnfPredicate::new(
+                &boolean,
+                &input_dfschema,
+                &input_schema,
+                &execution_props,
+            );
+            cnf.flatten_cnf_predicate();
+            let cnf_list = cnf.collect();
+            assert_eq!(2, cnf_list.len());
+            assert_eq!(&Column::new("a", 0), cnf_list[0][0].clone().as_any().downcast_ref::<Column>().unwrap());
+            assert_eq!(&Column::new("b", 1), cnf_list[0][1].clone().as_any().downcast_ref::<Column>().unwrap());
+            assert_eq!(&Column::new("c", 2), cnf_list[1][0].clone().as_any().downcast_ref::<Column>().unwrap());
+            println!("{:?}", cnf_list[0][0]);
+        } else {
+            unreachable!()
+        }
+    }
+}

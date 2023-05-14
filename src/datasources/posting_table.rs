@@ -280,7 +280,7 @@ mod tests {
         prelude::SessionContext, 
         arrow::array::{UInt16Array, UInt32Array}, 
         from_slice::FromSlice, common::cast::as_uint32_array, 
-        physical_plan::{expressions::col, PhysicalExpr, filter::FilterExec, common::collect, boolean::BooleanExec}
+        physical_plan::{expressions::col, PhysicalExpr, common::collect, boolean::BooleanExec}
     };
     use futures::StreamExt;
     use datafusion::physical_expr::expressions::boolean_query;
@@ -403,4 +403,4 @@ mod tests {
         debug!("{:?}", collect(stream).await.unwrap()[0]);
         Ok(())
     }
-} 
+}
