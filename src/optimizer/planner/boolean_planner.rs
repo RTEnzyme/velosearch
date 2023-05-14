@@ -8,7 +8,7 @@ use datafusion::{
         explain::ExplainExec, projection::ProjectionExec, boolean::BooleanExec, displayable}, 
         execution::context::SessionState, error::{Result, DataFusionError}, 
         logical_expr::{
-            LogicalPlan, expr::BooleanQuery, BinaryExpr, PlanType, ToStringifiedPlan, Projection, TableScan, expr_rewriter::unnormalize_cols, StringifiedPlan
+            LogicalPlan, expr::BooleanQuery, BinaryExpr, PlanType, ToStringifiedPlan, Projection, TableScan, expr_rewriter::unnormalize_cols, StringifiedPlan, Operator
         },
         physical_expr::boolean_query,
         common::DFSchema, arrow::datatypes::{Schema, SchemaRef}, 
@@ -309,20 +309,17 @@ fn create_physical_expr(
             )?;
             binary(lhs, *op, rhs, input_schema)
         }
-        Expr::BooleanQuery(BooleanQuery { left, op, right }) => {
-            let lhs = create_physical_expr(
-                left,
+        Expr::BooleanQuery(boolean) => {
+            let mut cnf_predicates = CnfPredicate::new(
+                boolean,
                 input_dfschema,
                 input_schema,
                 execution_props,
-            )?;
-            let rhs = create_physical_expr(
-                right,
-                input_dfschema,
-                input_schema,
-                execution_props,
-            )?;
-            boolean_query(lhs, *op, rhs, input_schema)
+            );
+            cnf_predicates.flatten_cnf_predicate();
+            let cnf_predicates = cnf_predicates.collect();
+            
+            boolean_query(cnf_predicates, input_schema)
         }
         Expr::Not(expr) => expressions::not(create_physical_expr(
             expr,
@@ -375,5 +372,62 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
         (Err(e), Ok(_)) => Err(e),
         (Ok(_), Err(e1)) => Err(e1),
         (Err(e), Err(_)) => Err(e),
+    }
+}
+
+struct CnfPredicate<'a> {
+    root: &'a BooleanQuery,
+    predicates: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    idx: usize,
+    input_dfschema: &'a DFSchema,
+    input_schema: &'a Schema,
+    execution_props: &'a ExecutionProps,
+}
+
+impl<'a> CnfPredicate<'a> {
+    fn new(root: &'a BooleanQuery, input_dfschema: &'a DFSchema, input_schema: &'a Schema, execution_props: &'a ExecutionProps) -> Self {
+        Self {
+            root,
+            predicates: Vec::new(),
+            idx: 0,
+            input_dfschema,
+            input_schema,
+            execution_props,
+        }
+    }
+
+    fn flatten_cnf_predicate(&mut self) {
+        self.flatten_impl(&self.root.left);
+        self.flatten_impl(&self.root.right);
+    }
+
+    fn flatten_impl(&mut self, expr: &Expr) {
+        if let Expr::BooleanQuery(boolean) = expr {
+            if boolean.op == Operator::BitwiseAnd {
+                self.flatten_impl(&boolean.left);
+                self.flatten_impl(&boolean.right);
+            } else if boolean.op == Operator::BitwiseOr {
+                self.predicates.push(vec![]);
+                self.append_or_expr(&boolean.left);
+                self.append_or_expr(&boolean.right);
+                self.idx += 1;
+            }
+        } else {
+            self.predicates.push(vec![create_physical_expr(expr, self.input_dfschema, self.input_schema, self.execution_props).unwrap()])
+        }
+    }
+
+    fn append_or_expr(&mut self, e: &Expr) {
+        match e {
+            Expr::BooleanQuery(boolean) => {
+                self.append_or_expr(&boolean.left);
+                self.append_or_expr(&boolean.right);
+            }
+            expr => self.predicates[self.idx].push(create_physical_expr(expr, self.input_dfschema, self.input_schema, self.execution_props).unwrap())
+        }
+    }
+
+    fn collect(self) -> Vec<Vec<Arc<dyn PhysicalExpr>>> {
+        self.predicates
     }
 }

@@ -1,6 +1,6 @@
 use std::{sync::{Arc, RwLock}, ops::Index, collections::HashMap};
 
-use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef}, record_batch::RecordBatch}};
+use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray}, record_batch::RecordBatch}};
 use crate::utils::{Result, FastErr};
 
 /// 
@@ -100,14 +100,15 @@ impl PostingBatch {
         let id_idx = self.schema.index_of("__id__").unwrap();
 
         let projected_schema = Schema::new(projected_fields);
-        let bitmask_size = self.range.nums32;
+        let bitmask_size: usize = self.range.len() as usize;
         let mut batches: Vec<ArrayRef> = Vec::with_capacity(indices.len());
         for idx in indices {
             if *idx == id_idx {
                 batches.push(Arc::new(UInt32Array::from_iter_values((self.range.start).. (self.range.start + 32 * self.range.nums32))));
                 continue;
             }
-            let mut bitmask = vec![0 as u32; bitmask_size as usize];
+            // To be optimized, we can convert bitvec to BooleanArray
+            let mut bitmap = vec![false; bitmask_size];
             let posting = self.postings.get(*idx).cloned().ok_or_else(|| {
                 FastErr::InternalErr(format!(
                     "project index {} out of bounds, max field {}",
@@ -118,10 +119,9 @@ impl PostingBatch {
             posting.values()
             .iter()
             .for_each(|v| {
-                let offset = (*v >> 6) as usize;
-                bitmask[offset] |= 1 << (31 - *v %32)
+                bitmap[*v as usize] = true
             });
-            batches.push(Arc::new(UInt32Array::from(bitmask)));
+            batches.push(Arc::new(BooleanArray::from(bitmap)));
         }
         // batches.push(Arc::new(UInt32Array::from_iter_values((self.range.start).. (self.range.start + 32 * self.range.nums32))));
         Ok(RecordBatch::try_new(Arc::new(projected_schema), batches)?)
@@ -222,7 +222,7 @@ impl PostingBatchBuilder {
 mod test {
     use std::{arch::x86_64::{ __m512i, _mm512_sllv_epi32}, simd::Simd, sync::Arc};
 
-    use datafusion::{arrow::{datatypes::{Schema, Field, DataType}, array::{UInt16Array}}, from_slice::FromSlice, common::cast::as_uint32_array};
+    use datafusion::{arrow::{datatypes::{Schema, Field, DataType}, array::{UInt16Array, BooleanArray}}, from_slice::FromSlice, common::cast::as_uint32_array};
 
     use super::{BatchRange, PostingBatch};
 
@@ -248,10 +248,11 @@ mod test {
 
     fn build_batch() -> PostingBatch {
         let schema = Arc::new(Schema::new(vec![
-            Field::new("test1", DataType::UInt32, true),
-            Field::new("test2", DataType::UInt32, true),
-            Field::new("test3", DataType::UInt32, true),
-            Field::new("test4", DataType::UInt32, true)
+            Field::new("test1", DataType::Boolean, true),
+            Field::new("test2", DataType::Boolean, true),
+            Field::new("test3", DataType::Boolean, true),
+            Field::new("test4", DataType::Boolean, true),
+            Field::new("__id__", DataType::UInt32, false),
         ]));
         let range = Arc::new(BatchRange {
             start: 0,
@@ -263,6 +264,7 @@ mod test {
            Arc::new(UInt16Array::from_slice([0, 4, 16])),
            Arc::new(UInt16Array::from_slice([4, 6, 8])),
            Arc::new(UInt16Array::from_slice([6, 16, 31])),
+           Arc::new(UInt16Array::from_slice([])),
         ];
         PostingBatch::try_new(schema, postings, range).unwrap()
     }
@@ -271,13 +273,18 @@ mod test {
     fn postingbatch_project_fold() {
         let batch = build_batch();
         let res = batch.project_fold(&[1, 2]).unwrap();
-        let expected = vec![0x88008000 as u32, 0x0a800000 as u32];
-        res.columns()
-        .into_iter()
-        .enumerate()
-        .for_each(|(i, v)| {
-            let arr = as_uint32_array(v).expect("can't downcast to UInt32Array");
-            assert_eq!(arr.value(0), expected[i], "Round{}: real: {:#b}, expected: {:#b}", i, arr.value(0), expected[i])
-        });
+        let mut exptected1 = vec![false; 64];
+        exptected1[0] = true;
+        exptected1[4] = true;
+        exptected1[16] = true;
+        let exptected1 = BooleanArray::from(exptected1);
+        let mut exptected2 = vec![false; 64];
+        exptected2[4] = true;
+        exptected2[6] = true;
+        exptected2[8] = true;
+        let exptected2 = BooleanArray::from(exptected2);
+
+        assert_eq!(res.column(0).as_any().downcast_ref::<BooleanArray>().unwrap(), &exptected1);
+        assert_eq!(res.column(1).as_any().downcast_ref::<BooleanArray>().unwrap(), &exptected2);
     }
 }

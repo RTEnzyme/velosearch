@@ -868,6 +868,7 @@ dependencies = [
  "num-traits",
  "paste",
  "rand",
+ "rayon",
  "regex",
  "sha2",
  "unicode-segmentation",

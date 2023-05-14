@@ -50,7 +50,7 @@ struct GetMinRange {
     partition_stats: Option<Vec<Vec<TermMeta>>>,
     partition_schema: Option<Arc<Schema>>,
     predicate: Option<Arc<BooleanQueryExpr>>,
-    min_range: Option<Vec<BooleanArray>>,
+    min_range: Option<Vec<Arc<BooleanArray>>>,
 }
 
 impl GetMinRange {
@@ -85,7 +85,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                     posting.term_metas_of(&project_terms, p)
                 })
                 .collect();
-            let partition_range: Vec<BooleanArray> = (0..term_stats.len())
+            let partition_range: Vec<Arc<BooleanArray>> = (0..term_stats.len())
                 .into_par_iter()
                 .map(|p| {
                     let mut range: Vec<ArrayRef> = Vec::new();
@@ -261,22 +261,10 @@ mod tests {
     fn boolean_exec() -> Arc<dyn ExecutionPlan> {
         let schema = schema();
         let predicate = boolean_query(
-            boolean_query(
-                col("a", &schema).unwrap(),
-                Operator::BitwiseOr,
-                col("b", &schema).unwrap(), 
-                &schema
-            ).unwrap(),
-            Operator::BitwiseAnd,
-            col("c", &schema).unwrap(),
-            &schema,
-        ).unwrap();
-        let predicate = boolean_query(
-            predicate,
-            Operator::BitwiseAnd,
-            lit(1 as u32),
-            &schema,
-        ).unwrap();
+            vec![
+                vec![col("a", &schema).unwrap(), col("b", &schema).unwrap()],
+                vec![col("c", &schema).unwrap()],
+            ], &schema).unwrap();
         let predicate = (0..2)
             .into_iter()
             .map(|v| {
@@ -310,7 +298,7 @@ mod tests {
             .into_iter()
             .zip(expected.iter())
             .for_each(|(l, r)| {
-                assert_eq!(l, r)
+                assert_eq!(l.as_ref(), r)
             });
         debug!("Final ExecutionPlan: {:?}", optimized_boolean);
     }

@@ -86,7 +86,7 @@ pub struct PostingExec {
     pub term_idx: Vec<Arc<TermIdx<TermMeta>>>,
     pub projected_schema: SchemaRef,
     pub projection: Option<Vec<usize>>,
-    pub partition_min_range: Option<Vec<BooleanArray>>,
+    pub partition_min_range: Option<Vec<Arc<BooleanArray>>>,
 }
 
 impl std::fmt::Debug for PostingExec {
@@ -180,7 +180,7 @@ impl PostingExec {
         term_idx: Vec<Arc<TermIdx<TermMeta>>>,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
-        partition_min_range: Option<Vec<BooleanArray>>,
+        partition_min_range: Option<Vec<Arc<BooleanArray>>>,
     ) -> Result<Self> {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
         Ok(Self {
@@ -266,18 +266,25 @@ impl RecordBatchStream for PostingStream {
 
 pub fn make_posting_schema(fields: Vec<&str>) -> Schema {
     Schema::new(
-        fields.into_iter()
-        .map(|f| Field::new(f, DataType::UInt32, false))
-        .collect()
+        [fields.into_iter()
+        .map(|f| Field::new(f, DataType::Boolean, false))
+        .collect(), vec![Field::new("__id__", DataType::UInt32, false)]].concat()
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use datafusion::{prelude::{SessionContext}, arrow::array::{UInt16Array, UInt32Array}, from_slice::FromSlice, common::cast::as_uint32_array, physical_plan::{expressions::col, PhysicalExpr, filter::FilterExec, common::collect}, logical_expr::Operator};
+    use std::collections::HashMap;
+
+    use datafusion::{
+        prelude::SessionContext, 
+        arrow::array::{UInt16Array, UInt32Array}, 
+        from_slice::FromSlice, common::cast::as_uint32_array, 
+        physical_plan::{expressions::col, PhysicalExpr, filter::FilterExec, common::collect, boolean::BooleanExec}
+    };
     use futures::StreamExt;
-    use datafusion::physical_expr::expressions::{boolean_query, lit};
-    use tracing::Level;
+    use datafusion::physical_expr::expressions::boolean_query;
+    use tracing::{Level, debug};
 
     use super::*;
 
@@ -291,7 +298,8 @@ mod tests {
                 Arc::new(UInt16Array::from_slice([1, 2, 6, 8, 15])),
                 Arc::new(UInt16Array::from_slice([0, 4, 9, 13, 17])),
                 Arc::new(UInt16Array::from_slice([3, 7, 11, 17, 19])),
-                Arc::new(UInt16Array::from_slice([6, 7, 9, 14, 18]))
+                Arc::new(UInt16Array::from_slice([6, 7, 9, 14, 18])),
+                Arc::new(UInt16Array::from_slice([])),
             ],
             range.clone()
         ).expect("Can't try new a PostingBatch");
@@ -367,7 +375,8 @@ mod tests {
                 Arc::new(UInt16Array::from_slice([1, 2, 6, 8, 15])),
                 Arc::new(UInt16Array::from_slice([0, 4, 9, 13, 17])),
                 Arc::new(UInt16Array::from_slice([3, 7, 11, 17, 19])),
-                Arc::new(UInt16Array::from_slice([6, 7, 9, 14, 18]))
+                Arc::new(UInt16Array::from_slice([6, 7, 9, 14, 18])),
+                Arc::new(UInt16Array::from_slice([])),
             ],
             range.clone()
         ).expect("Can't try new a PostingBatch");
@@ -378,28 +387,20 @@ mod tests {
             vec![vec![batch]], 
             vec![Arc::new(TermIdx::new())], 
             schema.clone(), 
-            Some(vec![1, 2]),
+            Some(vec![1, 2, 4]),
             None
         ).unwrap());
-
-        let predicate: Arc<dyn PhysicalExpr> = 
-            boolean_query(
-                boolean_query(
-                    col("a", &schema.clone())?,
-                    Operator::BitwiseAnd,
-                    col("b", &schema)?,
-                    &schema
-                )?,
-                Operator::BitwiseAnd,
-                    lit(1 as u32),
-                    &schema,
-            ).unwrap();
         
+        let predicate: Arc<dyn PhysicalExpr> = boolean_query(
+            vec![vec![col("a", &schema.clone())?, col("b", &schema)?]],
+            &schema,
+        )?;
+        let predicates = HashMap::from([(0, predicate)]);
         let filter: Arc<dyn ExecutionPlan> = 
-            Arc::new(FilterExec::try_new(predicate, input).unwrap());
+            Arc::new(BooleanExec::try_new(predicates, input, None, None).unwrap());
         
         let stream = filter.execute(0, task_ctx).unwrap();
-        println!("{:?}", collect(stream).await.unwrap()[0]);
+        debug!("{:?}", collect(stream).await.unwrap()[0]);
         Ok(())
     }
 } 
