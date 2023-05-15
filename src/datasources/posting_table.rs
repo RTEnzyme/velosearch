@@ -5,7 +5,7 @@ use datafusion::{
     arrow::{datatypes::{SchemaRef, Schema, Field, DataType}, record_batch::RecordBatch, array::BooleanArray}, 
     datasource::TableProvider, 
     logical_expr::TableType, execution::context::SessionState, prelude::Expr, error::{Result, DataFusionError}, 
-    physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream, boolean::TermMeta}};
+    physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream}, common::TermMeta};
 use futures::Stream;
 use learned_term_idx::TermIdx;
 
@@ -304,7 +304,7 @@ mod tests {
             range.clone()
         ).expect("Can't try new a PostingBatch");
 
-        let term_idx = vec![Arc::new(TermIdx::new())];
+        let term_idx: Vec<Arc<TermIdx<TermMeta>>> = vec![Arc::new(TermIdx::new())];
         let provider = PostingTable::new(
                 schema.clone(),
                 term_idx,
