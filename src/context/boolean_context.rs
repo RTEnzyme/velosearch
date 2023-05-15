@@ -11,7 +11,7 @@ use datafusion::{
 };
 use parking_lot::RwLock;
 
-use crate::{query::boolean_query::BooleanQuery, utils::FastErr, BooleanPhysicalPlanner, IntersectionSelection, MinOperationRange};
+use crate::{query::boolean_query::BooleanQuery, utils::FastErr, BooleanPhysicalPlanner, IntersectionSelection, MinOperationRange, PartitionPredicateReorder};
 use crate::utils::Result;
 
 #[derive(Clone)]
@@ -154,7 +154,8 @@ fn physical_optimizer_rulse() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync
     vec![
         // Arc::new(Repartition::new()),
         Arc::new(MinOperationRange::new()),
-        Arc::new(IntersectionSelection::new())
+        Arc::new(IntersectionSelection::new()),
+        Arc::new(PartitionPredicateReorder::new()),
         // Arc::new(EnforceDistribution::new()),
         // Arc::new(CoalesceBatches::new()),
         // Arc::new(PipelineChecker::new())

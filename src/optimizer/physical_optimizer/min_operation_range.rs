@@ -6,9 +6,9 @@ use std::sync::Arc;
 use datafusion::{
     physical_optimizer::PhysicalOptimizerRule, 
     physical_plan::{rewrite::{TreeNodeRewriter, RewriteRecursion, TreeNodeRewritable}, 
-    ExecutionPlan, boolean::{BooleanExec, TermMeta}}, error::DataFusionError, 
+    ExecutionPlan, boolean::BooleanExec}, error::DataFusionError, 
     physical_expr::BooleanQueryExpr, 
-    arrow::{datatypes::Schema, array::{BooleanArray, ArrayRef}, record_batch::RecordBatch}
+    arrow::{datatypes::Schema, array::{BooleanArray, ArrayRef}, record_batch::RecordBatch}, common::TermMeta
 };
 use datafusion::common::Result;
 use rayon::prelude::*;
@@ -163,7 +163,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
 mod tests {
     use std::{sync::Arc, collections::HashMap};
 
-    use datafusion::{arrow::{datatypes::{SchemaRef, Field, Schema, DataType}, array::{UInt16Array, BooleanArray}}, from_slice::FromSlice, physical_plan::{boolean::{TermMeta, BooleanExec}, expressions::{col, lit}, ExecutionPlan}, physical_expr::boolean_query, logical_expr::Operator, physical_optimizer::PhysicalOptimizerRule, config::ConfigOptions};
+    use datafusion::{arrow::{datatypes::{SchemaRef, Field, Schema, DataType}, array::{UInt16Array, BooleanArray}}, from_slice::FromSlice, physical_plan::{boolean::BooleanExec, expressions::col, ExecutionPlan}, physical_expr::boolean_query, physical_optimizer::PhysicalOptimizerRule, config::ConfigOptions, common::TermMeta};
     use learned_term_idx::TermIdx;
     use tracing::{Level, debug};
 

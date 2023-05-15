@@ -434,10 +434,9 @@ impl<'a> CnfPredicate<'a> {
 
 #[cfg(test)]
 mod tests {
-    use core::panic;
-    use std::{unreachable, println, assert_eq, sync::Arc};
+    use std::{unreachable, println, assert_eq, collections::HashMap};
 
-    use datafusion::{prelude::{col, boolean_or, boolean_and, Expr}, common::{DFSchema, DFField}, arrow::datatypes::{Schema, Field, DataType}, physical_expr::execution_props::ExecutionProps, physical_plan::{expressions::Column, PhysicalExpr}};
+    use datafusion::{prelude::{col, boolean_or, boolean_and, Expr}, common::{DFSchema, DFField}, arrow::datatypes::{Schema, Field, DataType}, physical_expr::execution_props::ExecutionProps, physical_plan::expressions::Column};
 
     use super::CnfPredicate;
 
@@ -449,12 +448,13 @@ mod tests {
         let a_b = boolean_or(a, b);
         let a_b_c = boolean_and(a_b, c);
         if let Expr::BooleanQuery(boolean) = a_b_c {
-            let input_dfschema = DFSchema::new(
+            let input_dfschema = DFSchema::new_with_metadata(
                 vec![
                     DFField::new(None, "a", DataType::Boolean, false),
                     DFField::new(None, "b", DataType::Boolean, false),
                     DFField::new(None, "c", DataType::Boolean, false),
-                ]
+                ],
+                HashMap::new(),
             ).unwrap();
             let input_schema = Schema::new(
                 vec![
