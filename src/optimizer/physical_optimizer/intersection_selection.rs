@@ -1,10 +1,12 @@
 //! IntersectionSelection optimizer that choose the better algorithm
 //! from `PIA` and `VIA`
 
-use std::{sync::Arc, unimplemented};
+use std::sync::Arc;
 
-use datafusion::{physical_optimizer::PhysicalOptimizerRule, physical_plan::{rewrite::{TreeNodeRewriter, RewriteRecursion, TreeNodeRewritable}, ExecutionPlan, boolean::BooleanExec}, physical_expr::BooleanQueryExpr};
+use datafusion::{physical_optimizer::PhysicalOptimizerRule, physical_plan::{ExecutionPlan, boolean::BooleanExec}, physical_expr::BooleanQueryExpr, error::DataFusionError};
 use datafusion::common::Result;
+
+use crate::datasources::posting_table::PostingExec;
 /// Optimizer rule that choose intersection algorithm using selectivity
 #[derive(Default)]
 pub struct IntersectionSelection {}
@@ -23,7 +25,7 @@ impl PhysicalOptimizerRule for IntersectionSelection {
         _config: &datafusion::config::ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(boolean) = plan.as_any().downcast_ref::<BooleanExec>() {
-            let is_via = boolean
+            let is_via: Vec<bool> = boolean
                 .predicate
                 .values()
                 .map(|p| {
@@ -38,14 +40,22 @@ impl PhysicalOptimizerRule for IntersectionSelection {
                     }
                 })
                 .collect();
-            Ok(Arc::new(
-                BooleanExec::try_new(
-                    boolean.predicate.to_owned(),
-                    boolean.input.clone(),
-                    Some(is_via),
-                    boolean.terms_stats.clone(),
-                )?
-            ))
+            if let Some(posting) = boolean.input.as_any().downcast_ref::<PostingExec>() {
+                let mut input = (*posting).clone();
+                input.is_via = Some(is_via.clone());
+                Ok(Arc::new(
+                    BooleanExec::try_new(
+                        boolean.predicate.to_owned(),
+                        Arc::new(input),
+                        Some(is_via),
+                        boolean.terms_stats.clone(),
+                    )?
+                ))
+            } else {
+                return Err(DataFusionError::Internal(format!(
+                    "The input of BooleanExec should be PostingExec"
+                )));
+            }
         } else {
             Ok(plan)
         }

@@ -91,6 +91,24 @@ impl PostingBatch {
         )
     }
 
+    pub fn project_adapt(&self, indices: &[usize]) -> Result<RecordBatch> {
+        let projected_fields: Vec<Field> = indices
+            .into_iter()
+            .map(|f| {
+                self.schema.fields.get(*f).cloned().unwrap()
+            }).collect();
+
+        let projected_schema = Schema::new(projected_fields);
+        let batches: Vec<ArrayRef> = indices
+            .into_iter()
+            .map(|v| self.postings[*v].clone() as ArrayRef)
+            .collect();
+        Ok(RecordBatch::try_new(
+            Arc::new(projected_schema),
+            batches,
+        )?)
+    }
+
     pub fn project_fold(&self, indices: &[usize]) -> Result<RecordBatch> {
         let projected_fields: Vec<Field> = indices
             .into_iter()

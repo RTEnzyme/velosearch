@@ -150,6 +150,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                 posting.schema.to_owned(),
                 posting.projection.to_owned(),
                 min_range,
+                posting.is_via.to_owned(),
             )?))
         }else {
             Err(DataFusionError::Internal(format!(
@@ -254,6 +255,7 @@ mod tests {
             term_idx,
             schema(), 
             Some(vec![0, 1, 2]),
+            None,
             None,
         ).unwrap())
     }

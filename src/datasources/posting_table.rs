@@ -75,11 +75,13 @@ impl TableProvider for PostingTable {
             self.term_idx.clone(),
             self.schema(), 
             projection.cloned(),
+            None,
             None
         )?))
     }
 }
 
+#[derive(Clone)]
 pub struct PostingExec {
     pub partitions: Vec<Vec<PostingBatch>>,
     pub schema: SchemaRef,
@@ -87,6 +89,7 @@ pub struct PostingExec {
     pub projected_schema: SchemaRef,
     pub projection: Option<Vec<usize>>,
     pub partition_min_range: Option<Vec<Arc<BooleanArray>>>,
+    pub is_via: Option<Vec<bool>>,
 }
 
 impl std::fmt::Debug for PostingExec {
@@ -140,6 +143,7 @@ impl ExecutionPlan for PostingExec {
             self.partitions[partition].clone(),
             self.projected_schema.clone(),
             self.projection.clone(),
+            self.is_via.as_ref().map_or(false, |v| v[partition]),
         )?))
     }
 
@@ -181,6 +185,7 @@ impl PostingExec {
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
         partition_min_range: Option<Vec<Arc<BooleanArray>>>,
+        is_via: Option<Vec<bool>>,
     ) -> Result<Self> {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
         Ok(Self {
@@ -190,6 +195,7 @@ impl PostingExec {
             projected_schema,
             projection,
             partition_min_range,
+            is_via,
         })
     }
 
@@ -215,6 +221,8 @@ pub struct PostingStream {
     projection: Option<Vec<usize>>,
     /// Index into the data
     index: usize,
+    /// If use via
+    is_via: bool,
 }
 
 impl PostingStream {
@@ -223,12 +231,14 @@ impl PostingStream {
         data: Vec<PostingBatch>,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
+        is_via: bool,
     ) -> Result<Self> {
         Ok(Self {
             data,
             schema,
             projection,
-            index: 0
+            index: 0,
+            is_via
         })
     }
 }
@@ -243,7 +253,11 @@ impl Stream for PostingStream {
 
         // return just the columns requested
         let batch = match self.projection.as_ref() {
-            Some(columns) => batch.project_fold(columns).map_err(|e| DataFusionError::Execution(e.to_string()))?,
+            Some(columns) => if self.is_via {
+                batch.project_fold(columns).map_err(|e| DataFusionError::Execution(e.to_string()))?
+            } else {
+                batch.project_adapt(columns).map_err(|e| DataFusionError::Execution(e.to_string()))?
+            },
             None => unreachable!("must have projection")
         };
         Some(Ok(batch))
@@ -388,7 +402,8 @@ mod tests {
             vec![Arc::new(TermIdx::new())], 
             schema.clone(), 
             Some(vec![1, 2, 4]),
-            None
+            None,
+            None,
         ).unwrap());
         
         let predicate: Arc<dyn PhysicalExpr> = boolean_query(
