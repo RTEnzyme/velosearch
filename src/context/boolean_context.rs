@@ -6,7 +6,7 @@ use datafusion::{
     execution::{context::{SessionState, QueryPlanner}, runtime_env::RuntimeEnv}, 
     prelude::SessionConfig, sql::TableReference, logical_expr::{LogicalPlanBuilder, LogicalPlan}, 
     datasource::{provider_as_source, TableProvider}, error::DataFusionError, 
-    optimizer::{OptimizerRule, rewrite_disjunctive_predicate::RewriteDisjunctivePredicate, push_down_projection::PushDownProjection}, 
+    optimizer::{OptimizerRule, rewrite_disjunctive_predicate::RewriteDisjunctivePredicate, push_down_projection::PushDownProjection, simplify_expressions::SimplifyExpressions}, 
     physical_optimizer::PhysicalOptimizerRule, scalar::ScalarValue, physical_plan::{PhysicalPlanner, ExecutionPlan}
 };
 use parking_lot::RwLock;
@@ -145,7 +145,7 @@ fn optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Sync + Send>> {
         // Arc::new(SimplifyExpressions::new()),
         // Arc::new(EliminateFilter::new()),
         // Arc::new(PushDownFilter::new()),
-        // Arc::new(SimplifyExpressions::new()),
+        Arc::new(SimplifyExpressions::new()),
         Arc::new(PushDownProjection::new())
     ]
 }

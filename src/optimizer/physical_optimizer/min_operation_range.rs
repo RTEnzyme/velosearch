@@ -75,7 +75,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
             Ok(RewriteRecursion::Continue)
         } else if let Some(posting) = any_node.downcast_ref::<PostingExec>(){
             debug!("Pre_visit PostingExec");
-            let projected_schema = posting.schema();
+            let projected_schema = posting.projected_schema.clone();
             self.partition_schema = Some(projected_schema.clone());
             let project_terms: Vec<&str> = projected_schema.fields().into_iter().map(|f| f.name().as_str()).collect();
             let partition_num = posting.output_partitioning().partition_count();
@@ -100,6 +100,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                     eval
                 })
                 .collect();
+            debug!("term_stats before: {:?}", term_stats);
             let term_stats: Vec<Vec<TermMeta>> = term_stats
                 .into_iter()
                 .zip(partition_range.iter())
@@ -108,15 +109,14 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                     let batch_size = posting.partitions[i][0].range().len();
                     let selectivity = (d.true_count() / d.len()) as f64;
                     s.into_iter()
-                    .zip(d.into_iter())
-                    .filter(|(_, b  )| b.unwrap())
-                    .map(|(mut s, _)| {
+                    .map(|mut s| {
                         s.selectivity = (s.nums as f64 * selectivity) /  batch_size as f64;
                         s
                     })
                     .collect()
                 })
                 .collect();
+            debug!("term_stats: {:?}", term_stats);
             self.min_range = Some(partition_range);
             self.partition_stats = Some(term_stats);
             Ok(RewriteRecursion::Continue)
@@ -153,9 +153,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                 posting.is_via.to_owned(),
             )?))
         }else {
-            Err(DataFusionError::Internal(format!(
-                "Should get terms statistics from PostingExec."
-            )))
+            Ok(node)
         }
     }
 }

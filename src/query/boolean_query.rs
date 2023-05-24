@@ -71,7 +71,7 @@ impl BooleanPredicateBuilder {
     }
 
     pub fn build(self) -> Expr {
-        boolean_and(self.predicate, lit(1 as u32))
+        self.predicate
     }
 
     // pub fn with_must_not(self) -> result<BooleanPredicateBuilder> {
@@ -179,8 +179,9 @@ pub mod tests {
     use std::sync::Arc;
     use std::time::Instant;
 
-    use datafusion::arrow::array::UInt16Array;
+    use datafusion::arrow::array::{UInt16Array, BooleanArray};
     use datafusion::arrow::datatypes::{Schema, Field, DataType};
+    use datafusion::common::TermMeta;
     use datafusion::from_slice::FromSlice;
     use datafusion::prelude::col;
     use learned_term_idx::TermIdx;
@@ -214,7 +215,11 @@ pub mod tests {
     pub fn make_posting_schema(fields: Vec<&str>) -> Schema {
         Schema::new(
             fields.into_iter()
-            .map(|f| Field::new(f, DataType::UInt32, false))
+            .map(|f| if f == "__id__" {
+                    Field::new(f, DataType::UInt32, false)
+                } else {
+                    Field::new(f, DataType::Boolean, false)
+                })
             .collect()
         )
     }
@@ -237,10 +242,42 @@ pub mod tests {
             range.clone()
         ).expect("Can't try new a PostingBatch");
 
+        let mut term_idx = TermIdx::new();
+        term_idx.insert("a".to_string(), TermMeta {
+            distribution: Arc::new(BooleanArray::from_slice(&[true])),
+            nums: 5,
+            index: vec![(0, 1)],
+            selectivity: 0.,
+        });
+        term_idx.insert("b".to_string(), TermMeta {
+            distribution: Arc::new(BooleanArray::from_slice(&[true])),
+            nums: 5,
+            index: vec![(0, 2)],
+            selectivity: 0.,
+        });
+        term_idx.insert("c".to_string(), TermMeta {
+            distribution: Arc::new(BooleanArray::from_slice(&[true])),
+            nums: 5,
+            index: vec![(0, 3)],
+            selectivity: 0.,
+        });
+        term_idx.insert("d".to_string(), TermMeta {
+            distribution: Arc::new(BooleanArray::from_slice(&[true])),
+            nums: 5,
+            index: vec![(0, 4)],
+            selectivity: 0.
+        });
+        term_idx.insert("__id__".to_string(), TermMeta {
+            distribution: Arc::new(BooleanArray::from_slice(&[false])),
+            nums: 0,
+            index: vec![],
+            selectivity: 0.,
+        });
+
         let session_ctx = BooleanContext::new();
         session_ctx.register_index("t", Arc::new(PostingTable::new(
             schema.clone(),
-            vec![Arc::new(TermIdx::new())],
+            vec![Arc::new(term_idx)],
             vec![vec![batch]],
             &BatchRange::new(0, 20)
         ))).unwrap();

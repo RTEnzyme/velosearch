@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use datafusion::{physical_optimizer::PhysicalOptimizerRule, physical_plan::{ExecutionPlan, boolean::BooleanExec}, physical_expr::BooleanQueryExpr, error::DataFusionError};
+use datafusion::{physical_optimizer::PhysicalOptimizerRule, physical_plan::{ExecutionPlan, boolean::BooleanExec, rewrite::TreeNodeRewritable}, physical_expr::BooleanQueryExpr, error::DataFusionError};
 use datafusion::common::Result;
 
 use crate::datasources::posting_table::PostingExec;
@@ -40,22 +40,34 @@ impl PhysicalOptimizerRule for IntersectionSelection {
                     }
                 })
                 .collect();
-            if let Some(posting) = boolean.input.as_any().downcast_ref::<PostingExec>() {
-                let mut input = (*posting).clone();
-                input.is_via = Some(is_via.clone());
-                Ok(Arc::new(
-                    BooleanExec::try_new(
-                        boolean.predicate.to_owned(),
-                        Arc::new(input),
-                        Some(is_via),
-                        boolean.terms_stats.clone(),
-                    )?
-                ))
-            } else {
-                return Err(DataFusionError::Internal(format!(
-                    "The input of BooleanExec should be PostingExec"
-                )));
-            }
+            plan.transform_up(&|p| {
+                if let Some(posting) = p.as_any().downcast_ref::<PostingExec>() {
+                    let mut input = (*posting).clone();
+                    input.is_via = Some(is_via.clone());
+                    Ok(Some(Arc::new(
+                        PostingExec::try_new(
+                            input.partitions.to_owned(),
+                            input.term_idx,
+                            input.schema,
+                            input.projection,
+                            input.partition_min_range,
+                            Some(is_via.clone()),
+                        )?
+                    )))
+                } else if let Some(boolean) = p.as_any().downcast_ref::<BooleanExec>() {
+                    Ok(Some(Arc::new(
+                        BooleanExec::try_new(
+                            boolean.predicate.clone(),
+                            boolean.input.clone(),
+                            Some(is_via.clone()),
+                            boolean.terms_stats.clone(),
+                        )?
+                    )))
+                } else {
+                    Ok(None)
+                }
+            })
+               
         } else {
             Ok(plan)
         }

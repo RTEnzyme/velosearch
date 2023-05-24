@@ -8,6 +8,7 @@ use datafusion::{
     physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream}, common::TermMeta};
 use futures::Stream;
 use learned_term_idx::TermIdx;
+use tracing::debug;
 
 use crate::batch::{PostingBatch, BatchRange, PostingBatchBuilder};
 
@@ -202,6 +203,7 @@ impl PostingExec {
     /// Get TermMeta From &[&str]
     pub fn term_metas_of(&self, terms: &[&str], partition: usize) -> Vec<TermMeta> {
         let term_idx = self.term_idx[partition].clone();
+        debug!("terms: {:?}", terms);
         terms
             .into_iter()
             .map(|&t| {
@@ -256,7 +258,7 @@ impl Stream for PostingStream {
             Some(columns) => if self.is_via {
                 batch.project_fold(columns).map_err(|e| DataFusionError::Execution(e.to_string()))?
             } else {
-                batch.project_adapt(columns).map_err(|e| DataFusionError::Execution(e.to_string()))?
+                batch.project_fold(columns).map_err(|e| DataFusionError::Execution(e.to_string()))?
             },
             None => unreachable!("must have projection")
         };
