@@ -1,4 +1,4 @@
-use std::{sync::{Arc, RwLock}, ops::Index, collections::HashMap};
+use std::{sync::{Arc, RwLock}, ops::Index, collections::HashMap, cmp::max};
 
 use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray}, record_batch::RecordBatch}};
 use crate::utils::{Result, FastErr};
@@ -204,6 +204,18 @@ impl PostingBatchBuilder {
             .or_insert(Vec::new())
             .push((doc_id - self.start) as u16);
         self.current = doc_id;
+        Ok(())
+    }
+
+    pub fn push_term_posting(&mut self, term: String, doc_ids: Vec<u32>) -> Result<()> {
+        let current = max(self.current, doc_ids[doc_ids.len() - 1]);
+        self.term_dict
+            .get_mut()
+            .map_err(|_| FastErr::InternalErr(format!("Can't acquire the RwLock correctly")))?
+            .entry(term)
+            .or_insert(Vec::new())
+            .extend(doc_ids.into_iter().map(|v| (v - self.start) as u16));
+        self.current = current;
         Ok(())
     }
 
