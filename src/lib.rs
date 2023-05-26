@@ -25,6 +25,9 @@ pub struct FastArgs {
     #[arg(value_enum)]
     pub handler: Handler,
 
+    #[arg(short, long)]
+    pub partition_num: Option<usize>,
+
 }
 
 #[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, ValueEnum, Debug)]
@@ -34,4 +37,5 @@ pub enum Handler {
    SplitO1,
    LoadData,
    BooleanQuery,
+   PostingTable,
 }

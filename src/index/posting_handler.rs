@@ -17,6 +17,7 @@ pub struct PostingHandler {
     ids: Option<Vec<u32>>,
     words: Option<Vec<String>>,
     test_case: Vec<String>,
+    partition_nums: usize,
 }
 
 impl PostingHandler {
@@ -26,7 +27,6 @@ impl PostingHandler {
         let mut ids: Vec<u32> = Vec::new();
         let mut words: Vec<String> = Vec::new();
         let mut cnt = 0;
-
 
         items
         .into_iter()
@@ -44,12 +44,14 @@ impl PostingHandler {
 
         let mut rng = thread_rng();
         let test_case = words.iter()
+            .collect::<HashSet<_>>()
+            .into_iter()
             .choose_multiple(&mut rng, 100)
             .into_iter()
             .map(|e| e.to_string())
             .collect();
         info!("self.doc_len = {}", doc_len);
-        Self { doc_len, ids: Some(ids), words: Some(words), test_case }
+        Self { doc_len, ids: Some(ids), words: Some(words), test_case, partition_nums }
     }
 
 }
@@ -62,7 +64,7 @@ impl HandlerT for PostingHandler {
 
     async fn execute(&mut self) ->  Result<()> {
 
-        let partition_nums = 48 as usize;
+        let partition_nums = self.partition_nums;
         let posting_table = to_batch(self.ids.take().unwrap(), self.words.take().unwrap(), self.doc_len, partition_nums);
         let ctx = BooleanContext::new();
         ctx.register_index(TableReference::Bare { table: "__table__".into() }, Arc::new(posting_table))?;
@@ -72,7 +74,7 @@ impl HandlerT for PostingHandler {
         let mut handlers = Vec::with_capacity(20);
         let time = Instant::now();
         let mut cnt = 0;
-        for _ in 0..20 {
+        for _ in 0..1 {
             let keys = test_iter.by_ref().take(5).collect::<Vec<String>>();
             cnt += 1;
             let table = table.clone();
@@ -81,8 +83,7 @@ impl HandlerT for PostingHandler {
             let predicate = predicate.with_must(predicate1).unwrap();
             handlers.push(tokio::spawn(async move {
                 table.boolean_predicate(predicate.build()).unwrap()
-                    .explain(true, true).unwrap()
-                    .show().await.unwrap();
+                    .collect().await.unwrap();
             }))
         }
 
@@ -95,43 +96,48 @@ impl HandlerT for PostingHandler {
     }
 }
 
+const BATCH_SIZE: usize = 512;
+
 fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: usize) -> PostingTable {
     let _span = span!(Level::INFO, "PostingHanlder to_batch").entered();
-    let num_512 = length / 512;
+    let num_512 = length / BATCH_SIZE;
     let num_512_partition = num_512 / partition_nums;
 
     let schema = Schema::new(
-        words.iter().collect::<HashSet<_>>().into_iter().map(|v| Field::new(v.to_string(), DataType::Boolean, false)).collect()
+        words.iter().collect::<HashSet<_>>().into_iter().chain([&"__id__".to_string()].into_iter()).map(|v| Field::new(v.to_string(), DataType::Boolean, false)).collect()
     );
+    info!("The lenght of schema: {}", schema.fields().len());
     info!("num_512: {}, num_512_partition: {}", num_512, num_512_partition);
     let mut partition_batch = Vec::new();
     let mut term_idx: Vec<TermIdx<TermMetaBuilder>> = Vec::new();
     for i in 0..partition_nums {
         let mut batches = Vec::new();
         for j in 0..num_512_partition {
-            batches.push(PostingBatchBuilder::new((i * 512 * num_512_partition + j * 512) as u32));
+            batches.push(PostingBatchBuilder::new((i * BATCH_SIZE * num_512_partition + j * BATCH_SIZE) as u32));
         }
         partition_batch.push(batches);
         term_idx.push(TermIdx::new());
     }
     let mut current = (0, 0);
-    let mut thredhold = 512;
+    let mut thredhold = BATCH_SIZE;
     words
         .into_iter()
         .zip(ids.into_iter())
         .for_each(|(word, id)| {
-            if id == thredhold {
-                if thredhold % (512 * num_512_partition) as u32 == 0 {
+            let entry = term_idx[current.0].term_map.entry(word.clone()).or_insert(TermMetaBuilder::new(num_512_partition));
+            if id == thredhold as u32 {
+                if thredhold % (BATCH_SIZE * num_512_partition) == 0 {
                     current.0 += 1;
                     current.1 = 0;
                     info!("Start build ({}, {}) batch", current.0, current.1);
-                } else {
+                } else if thredhold % BATCH_SIZE == 0{
                     current.1 += 1;
+                    entry.add_idx((0, current.1.try_into().unwrap()));
                 }
-                thredhold += 1;
+                thredhold += BATCH_SIZE;
             }
-            partition_batch[current.0][current.1].push_term(word.clone(), id).expect("Shoud push term correctly");
-            term_idx[current.0].term_map.entry(word).or_insert(TermMetaBuilder::new(num_512_partition)).set_true(current.1);
+            partition_batch[current.0][current.1].push_term(word, id).expect("Shoud push term correctly");
+            entry.set_true(current.1);
         });
     let partition_batch = partition_batch
         .into_iter()
@@ -149,20 +155,22 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
         Arc::new(schema),
         term_idx,
         partition_batch,
-        &BatchRange::new(0, (num_512_partition * 512) as u32),
+        &BatchRange::new(0, (num_512_partition * BATCH_SIZE) as u32),
     )
 }
 
 struct TermMetaBuilder {
     distribution: Vec<bool>,
     nums: u32,
+    idx: Vec<Option<u16>>,
 }
 
 impl TermMetaBuilder {
     fn new(batch_num: usize) -> Self {
         Self {
             distribution: vec![false; batch_num],
-            nums: 0
+            nums: 0,
+            idx: vec![None; batch_num],
         }
     }
 
@@ -172,6 +180,10 @@ impl TermMetaBuilder {
         }
         self.nums += 1;
         self.distribution[i] = true;
+    }
+
+    fn add_idx(&mut self, idx: (u16, u16)) {
+        self.idx.push(idx)
     }
 
     fn build(self) -> TermMeta {

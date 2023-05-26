@@ -1,6 +1,7 @@
 use std::{sync::{Arc, RwLock}, ops::Index, collections::HashMap, cmp::max};
 
-use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray}, record_batch::RecordBatch}};
+use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray}, record_batch::RecordBatch}, from_slice::FromSlice, common::TermMeta};
+use learned_term_idx::TermIdx;
 use crate::utils::{Result, FastErr};
 
 /// 
@@ -91,40 +92,39 @@ impl PostingBatch {
         )
     }
 
-    pub fn project_adapt(&self, indices: &[usize]) -> Result<RecordBatch> {
-        let projected_fields: Vec<Field> = indices
+    pub fn project_adapt(&self, indices: &[Option<usize>]) -> Result<RecordBatch> {
+        let mut projected_fields: Vec<Field> = indices
             .into_iter()
             .map(|f| {
                 self.schema.fields.get(*f).cloned().unwrap()
             }).collect();
+        projected_fields.push(Field::new("__id__", DataType::UInt32, false));
 
         let projected_schema = Schema::new(projected_fields);
-        let batches: Vec<ArrayRef> = indices
+        let mut batches: Vec<ArrayRef> = indices
             .into_iter()
             .map(|v| self.postings[*v].clone() as ArrayRef)
             .collect();
+        batches.push(Arc::new(UInt32Array::from_slice(&[])));
+        
         Ok(RecordBatch::try_new(
             Arc::new(projected_schema),
             batches,
         )?)
     }
 
-    pub fn project_fold(&self, indices: &[usize]) -> Result<RecordBatch> {
-        let projected_fields: Vec<Field> = indices
+    pub fn project_fold(&self, indices: &[Option<usize>]) -> Result<RecordBatch> {
+        let mut projected_fields: Vec<Field> = indices
             .into_iter()
             .map(|f| {
-                self.schema.fields.get(*f).cloned().unwrap()
+                self.schema.fields[*f].clone()
             }).collect();
-        let id_idx = self.schema.index_of("__id__").unwrap();
+        projected_fields.push(Field::new("__id__", DataType::UInt32, false));
 
         let projected_schema = Schema::new(projected_fields);
         let bitmask_size: usize = self.range.len() as usize;
         let mut batches: Vec<ArrayRef> = Vec::with_capacity(indices.len());
         for idx in indices {
-            if *idx == id_idx {
-                batches.push(Arc::new(UInt32Array::from_iter_values((self.range.start).. (self.range.start + 32 * self.range.nums32))));
-                continue;
-            }
             // To be optimized, we can convert bitvec to BooleanArray
             let mut bitmap = vec![false; bitmask_size];
             let posting = self.postings.get(*idx).cloned().ok_or_else(|| {
@@ -141,7 +141,7 @@ impl PostingBatch {
             });
             batches.push(Arc::new(BooleanArray::from(bitmap)));
         }
-        // batches.push(Arc::new(UInt32Array::from_iter_values((self.range.start).. (self.range.start + 32 * self.range.nums32))));
+        batches.push(Arc::new(UInt32Array::from_iter_values((self.range.start).. (self.range.start + 32 * self.range.nums32))));
         Ok(RecordBatch::try_new(Arc::new(projected_schema), batches)?)
     }
 
@@ -241,6 +241,8 @@ impl PostingBatchBuilder {
                 schema_list.push(Field::new(k, DataType::UInt32, false));
                 postings.push(Arc::new(UInt16Array::from(v)));
             });
+        schema_list.push(Field::new("__id__", DataType::UInt32, false));
+        postings.push(Arc::new(UInt16Array::from_slice(&[])));
        PostingBatch::try_new(
             Arc::new(Schema::new(schema_list)),
             postings,

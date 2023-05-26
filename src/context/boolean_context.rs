@@ -145,7 +145,7 @@ fn optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Sync + Send>> {
         // Arc::new(SimplifyExpressions::new()),
         // Arc::new(EliminateFilter::new()),
         // Arc::new(PushDownFilter::new()),
-        Arc::new(SimplifyExpressions::new()),
+        // Arc::new(SimplifyExpressions::new()),
         Arc::new(PushDownProjection::new())
     ]
 }

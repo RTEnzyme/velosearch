@@ -37,7 +37,6 @@ impl PhysicalOptimizerRule for PartitionPredicateReorder {
                         .enumerate()
                         .map(|(i, f)| (f.name().as_str(), i))
                         .collect();
-                    println!("{:?} {:?}", term2idx, stats);
                     let reorder_predicate: HashMap<usize, Arc<dyn PhysicalExpr>> = stats
                         .iter()
                         .map(|p| {

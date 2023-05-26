@@ -2,7 +2,7 @@ use std::{any::Any, sync::Arc, task::Poll};
 
 use async_trait::async_trait;
 use datafusion::{
-    arrow::{datatypes::{SchemaRef, Schema, Field, DataType}, record_batch::RecordBatch, array::BooleanArray}, 
+    arrow::{datatypes::{SchemaRef, Schema, Field, DataType}, record_batch::RecordBatch, array::{BooleanArray, UInt16Array}, compute::filter}, 
     datasource::TableProvider, 
     logical_expr::TableType, execution::context::SessionState, prelude::Expr, error::{Result, DataFusionError}, 
     physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream}, common::TermMeta};
@@ -145,6 +145,8 @@ impl ExecutionPlan for PostingExec {
             self.projected_schema.clone(),
             self.projection.clone(),
             self.is_via.as_ref().map_or(false, |v| v[partition]),
+            self.partition_min_range.as_ref().unwrap()[partition].clone(),
+            self.term_idx[partition].clone(),
         )?))
     }
 
@@ -201,15 +203,14 @@ impl PostingExec {
     }
 
     /// Get TermMeta From &[&str]
-    pub fn term_metas_of(&self, terms: &[&str], partition: usize) -> Vec<TermMeta> {
+    pub fn term_metas_of(&self, terms: &[&str], partition: usize) -> Vec<Option<TermMeta>> {
         let term_idx = self.term_idx[partition].clone();
         debug!("terms: {:?}", terms);
         terms
             .into_iter()
             .map(|&t| {
-                term_idx.get(t).expect(format!("Should have {} term meta", t).as_str())
+                term_idx.get(t).cloned()
             })
-            .cloned()
             .collect()
     }
 }
@@ -225,6 +226,10 @@ pub struct PostingStream {
     index: usize,
     /// If use via
     is_via: bool,
+    /// TermIdx
+    term_idx: Arc<TermIdx<TermMeta>>,
+    /// project_idx
+    project_idx: Vec<Vec<Option<u16>>>,
 }
 
 impl PostingStream {
@@ -234,13 +239,39 @@ impl PostingStream {
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
         is_via: bool,
+        min_range: Arc<BooleanArray>,
+        term_idx: Arc<TermIdx<TermMeta>>,
     ) -> Result<Self> {
+        // project_fold传入&[Option<usize>]和projected_schema
+        let valid_data = data.into_iter()
+            .zip(min_range.into_iter())
+            .filter(|(_, v)| v.unwrap())
+            .map(|(d, _)| d)
+            .collect();
+
+        let distr: Vec<UInt16Array> = projection.as_ref().unwrap().into_iter()
+            .map(|f| &schema.field(*f).name())
+            .filter(|f| **f != "__id__")
+            .map(|f| &term_idx.get(f).unwrap().index.clone())
+            .map(|f| 
+                *filter(f.as_ref(), &min_range).unwrap().as_any().downcast_ref::<UInt16Array>().unwrap()
+            )
+            .collect();
+        let mut project_idx = vec![vec![]; distr[0].len()];
+        for terms in distr {
+            for (i, term) in terms.into_iter().enumerate() {
+                project_idx[i].push(term);
+            }
+        }
+        
         Ok(Self {
-            data,
+            data: valid_data,
             schema,
             projection,
             index: 0,
-            is_via
+            is_via,
+            term_idx,
+            project_idx,
         })
     }
 }
@@ -249,23 +280,24 @@ impl Stream for PostingStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(mut self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
-       Poll::Ready(if self.index < self.data.len() {
+        Poll::Ready(if self.index < self.data.len() {
         self.index += 1;
         let batch = &self.data[self.index - 1];
 
+
         // return just the columns requested
-        let batch = match self.projection.as_ref() {
-            Some(columns) => if self.is_via {
-                batch.project_fold(columns).map_err(|e| DataFusionError::Execution(e.to_string()))?
-            } else {
-                batch.project_fold(columns).map_err(|e| DataFusionError::Execution(e.to_string()))?
-            },
-            None => unreachable!("must have projection")
-        };
+        let batch = {
+                let indices = self.project_idx[self.index - 1];
+                if self.is_via {
+                    batch.project_fold(indices).map_err(|e| DataFusionError::Execution(e.to_string()))?
+                } else {
+                    batch.project_adapt(indices).map_err(|e| DataFusionError::Execution(e.to_string()))?
+                }
+            };
         Some(Ok(batch))
-       } else {
+        } else {
         None
-       }) 
+        }) 
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
