@@ -8,7 +8,7 @@ use datafusion::{
     physical_plan::{rewrite::{TreeNodeRewriter, RewriteRecursion, TreeNodeRewritable}, 
     ExecutionPlan, boolean::BooleanExec}, error::DataFusionError, 
     physical_expr::BooleanQueryExpr, 
-    arrow::{datatypes::Schema, array::{BooleanArray, ArrayRef}, record_batch::RecordBatch}, common::TermMeta
+    arrow::{datatypes::Schema, array::{BooleanArray, ArrayRef}, record_batch::RecordBatch}, common::TermMeta, from_slice::FromSlice
 };
 use datafusion::common::Result;
 use rayon::prelude::*;
@@ -47,7 +47,7 @@ impl PhysicalOptimizerRule for MinOperationRange {
 
 #[derive(Clone)]
 struct GetMinRange {
-    partition_stats: Option<Vec<Vec<TermMeta>>>,
+    partition_stats: Option<Vec<Vec<Option<TermMeta>>>>,
     partition_schema: Option<Arc<Schema>>,
     predicate: Option<Arc<BooleanQueryExpr>>,
     min_range: Option<Vec<Arc<BooleanArray>>>,
@@ -79,7 +79,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
             self.partition_schema = Some(projected_schema.clone());
             let project_terms: Vec<&str> = projected_schema.fields().into_iter().map(|f| f.name().as_str()).collect();
             let partition_num = posting.output_partitioning().partition_count();
-            let term_stats: Vec<Vec<TermMeta>> = 
+            let term_stats: Vec<Vec<Option<TermMeta>>> = 
                 (0..partition_num).into_iter()
                 .map(|p| {
                     posting.term_metas_of(&project_terms, p)
@@ -89,29 +89,50 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                 .into_par_iter()
                 .map(|p| {
                     let mut range: Vec<ArrayRef> = Vec::new();
-                    for t in &term_stats[p] {
-                        range.push(t.distribution());
+                    let mut length = None;
+                    for term in &term_stats[p] {
+                        if let Some(t) = term {
+                            length = Some(t.distribution().len());
+                            break;
+                        }
                     }
-                    let batch = RecordBatch::try_new(
-                        projected_schema.clone(),
-                        range,
-                    ).unwrap();
-                    let eval = self.predicate.as_ref().unwrap().eval(batch).unwrap();
-                    eval
+                    if let Some(length) = length {
+                        for t in &term_stats[p] {
+                            range.push(
+                                match t {
+                                    Some(t) => t.distribution().clone(),
+                                    None => Arc::new(BooleanArray::from(vec![false; length])),
+                                }
+                            )
+                        }
+                        let batch = RecordBatch::try_new(
+                            projected_schema.clone(),
+                            range,
+                        ).unwrap();
+                        let eval = self.predicate.as_ref().unwrap().eval(batch).unwrap();
+                        eval
+                    } else {
+                        Arc::new(BooleanArray::from_slice(&[]))
+                    }
                 })
                 .collect();
             debug!("term_stats before: {:?}", term_stats);
-            let term_stats: Vec<Vec<TermMeta>> = term_stats
+            let term_stats: Vec<Vec<Option<TermMeta>>> = term_stats
                 .into_iter()
                 .zip(partition_range.iter())
                 .enumerate()
                 .map(|(i, (s, d))| {
                     let batch_size = posting.partitions[i][0].range().len();
-                    let selectivity = (d.true_count() / d.len()) as f64;
+                    let selectivity = if d.len() == 0 { 0. } else {(d.true_count() / d.len()) as f64};
                     s.into_iter()
                     .map(|mut s| {
-                        s.selectivity = (s.nums as f64 * selectivity) /  batch_size as f64;
-                        s
+                        match s {
+                            Some(mut s) => {
+                                s.selectivity = (s.nums as f64 * selectivity) /  batch_size as f64;
+                                Some(s)
+                            }
+                            None => None
+                        }
                     })
                     .collect()
                 })
