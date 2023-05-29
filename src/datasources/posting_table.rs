@@ -249,12 +249,12 @@ impl PostingStream {
             .map(|(d, _)| d)
             .collect();
 
-        let distr: Vec<UInt16Array> = projection.as_ref().unwrap().into_iter()
-            .map(|f| &schema.field(*f).name())
-            .filter(|f| **f != "__id__")
-            .map(|f| &term_idx.get(f).unwrap().index.clone())
+        let distr: Vec<UInt16Array> = schema.fields().into_iter()
+            .map(|f| f.name())
+            .filter(|f| *f != "__id__")
+            .map(|f| term_idx.get(f).unwrap().index.clone())
             .map(|f| 
-                *filter(f.as_ref(), &min_range).unwrap().as_any().downcast_ref::<UInt16Array>().unwrap()
+                filter(f.as_ref(), &min_range).unwrap().as_any().downcast_ref::<UInt16Array>().unwrap().to_owned()
             )
             .collect();
         let mut project_idx = vec![vec![]; distr[0].len()];
@@ -263,8 +263,6 @@ impl PostingStream {
                 project_idx[i].push(term.map(|v| v as usize))
             }
         }
-
-        let schema = Arc::new(schema.project(projection.as_ref().unwrap())?);
         
         Ok(Self {
             data: valid_data,
@@ -289,11 +287,11 @@ impl Stream for PostingStream {
 
         // return just the columns requested
         let batch = {
-                let indices = self.project_idx[self.index - 1];
+                let indices = &self.project_idx[self.index - 1];
                 if self.is_via {
-                    batch.project_fold(indices.as_slice(), self.schema).map_err(|e| DataFusionError::Execution(e.to_string()))?
+                    batch.project_fold(indices.as_slice(), self.schema.clone()).map_err(|e| DataFusionError::Execution(e.to_string()))?
                 } else {
-                    batch.project_adapt(indices.as_slice(), self.schema).map_err(|e| DataFusionError::Execution(e.to_string()))?
+                    batch.project_adapt(indices.as_slice(), self.schema.clone()).map_err(|e| DataFusionError::Execution(e.to_string()))?
                 }
             };
         Some(Ok(batch))

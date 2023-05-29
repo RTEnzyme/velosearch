@@ -99,7 +99,7 @@ impl PostingBatch {
                 None => Arc::new(UInt16Array::from_slice(&[])),
         })
             .collect();
-        batches.push(Arc::new(UInt32Array::from_slice(&[])));
+        batches.insert(projected_schema.index_of("__id__").expect("Should have __id__ field"), Arc::new(UInt32Array::from_slice(&[])));
         
         Ok(RecordBatch::try_new(
             projected_schema,
@@ -132,7 +132,7 @@ impl PostingBatch {
             });
             batches.push(Arc::new(BooleanArray::from(bitmap)));
         }
-        batches.push(Arc::new(UInt32Array::from_iter_values((self.range.start).. (self.range.start + 32 * self.range.nums32))));
+        batches.insert(projected_schema.index_of("__id__").expect("Should have __id__ field"), Arc::new(UInt32Array::from_iter_values((self.range.start).. (self.range.start + 32 * self.range.nums32))));
         Ok(RecordBatch::try_new(projected_schema, batches)?)
     }
 

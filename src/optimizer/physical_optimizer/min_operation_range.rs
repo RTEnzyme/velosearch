@@ -71,12 +71,12 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
         let any_node = node.as_any();
         if let Some(boolean) = any_node.downcast_ref::<BooleanExec>() {
             debug!("Pre_visit BooleanExec");
+            self.partition_schema = Some(boolean.input.schema().clone());
             self.predicate = Some(Arc::new(boolean.predicate().clone()));
             Ok(RewriteRecursion::Continue)
         } else if let Some(posting) = any_node.downcast_ref::<PostingExec>(){
             debug!("Pre_visit PostingExec");
-            let projected_schema = posting.projected_schema.clone();
-            self.partition_schema = Some(projected_schema.clone());
+            let projected_schema = self.partition_schema.as_ref().unwrap().clone();
             let project_terms: Vec<&str> = projected_schema.fields().into_iter().map(|f| f.name().as_str()).collect();
             let partition_num = posting.output_partitioning().partition_count();
             let term_stats: Vec<Vec<Option<TermMeta>>> = 
@@ -109,14 +109,16 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                             projected_schema.clone(),
                             range,
                         ).unwrap();
+                        debug!("eval batch: {:?}", batch);
                         let eval = self.predicate.as_ref().unwrap().eval(batch).unwrap();
+                        debug!("eval result: {:?}", eval);
                         eval
                     } else {
                         Arc::new(BooleanArray::from_slice(&[]))
                     }
                 })
                 .collect();
-            debug!("term_stats before: {:?}", term_stats);
+            debug!("min_partition_range: {:?}", partition_range);
             let term_stats: Vec<Vec<Option<TermMeta>>> = term_stats
                 .into_iter()
                 .zip(partition_range.iter())
@@ -125,7 +127,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                     let batch_size = posting.partitions[i][0].range().len();
                     let selectivity = if d.len() == 0 { 0. } else {(d.true_count() / d.len()) as f64};
                     s.into_iter()
-                    .map(|mut s| {
+                    .map(|s| {
                         match s {
                             Some(mut s) => {
                                 s.selectivity = (s.nums as f64 * selectivity) /  batch_size as f64;
@@ -257,16 +259,16 @@ mod tests {
 
     fn posting_exec() -> Arc<PostingExec> {
         let term_idx1: HashMap<String, TermMeta> = vec![
-            ("a".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, false])), index: vec![], nums:4 , selectivity: 0.}),
-            ("b".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, true])), index: vec![], nums: 6, selectivity: 0.}),
-            ("c".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, false])), index: vec![], nums: 3, selectivity: 0.}),
-            ("d".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, true])), index: vec![], nums: 6, selectivity: 0.}),
+            ("a".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, false])), index: Arc::new(UInt16Array::from(vec![Some(0), None])), nums:4 , selectivity: 0.}),
+            ("b".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, true])), index: Arc::new(UInt16Array::from(vec![Some(1), Some(1)])), nums: 6, selectivity: 0.}),
+            ("c".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, false])), index: Arc::new(UInt16Array::from(vec![Some(2), None])), nums: 3, selectivity: 0.}),
+            ("d".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, true])), index: Arc::new(UInt16Array::from(vec![Some(3), Some(3)])), nums: 6, selectivity: 0.}),
         ].into_iter().collect();
         let term_idx2: HashMap<String, TermMeta> = vec![
-            ("a".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, false])), index: vec![], nums: 3, selectivity: 0.}),
-            ("b".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, true])), index: vec![], nums: 5, selectivity: 0.}),
-            ("c".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, true])), index: vec![], nums: 5, selectivity: 0.}),
-            ("d".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, true])), index: vec![], nums: 5, selectivity: 0.}),
+            ("a".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, false])), index: Arc::new(UInt16Array::from(vec![Some(0), None])), nums: 3, selectivity: 0.}),
+            ("b".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, true])), index: Arc::new(UInt16Array::from(vec![Some(1), Some(1)])), nums: 5, selectivity: 0.}),
+            ("c".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, true])), index: Arc::new(UInt16Array::from(vec![Some(2), Some(2)])), nums: 5, selectivity: 0.}),
+            ("d".to_string(), TermMeta{distribution: Arc::new(BooleanArray::from_slice(&[true, true])), index: Arc::new(UInt16Array::from(vec![Some(3), Some(3)])), nums: 5, selectivity: 0.}),
         ].into_iter().collect();
         let term_idx = vec![Arc::new(TermIdx {term_map: term_idx1}), Arc::new(TermIdx {term_map: term_idx2})];
         Arc::new(PostingExec::try_new(

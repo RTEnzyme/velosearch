@@ -1,7 +1,7 @@
 use std::{pin::Pin, collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
-use datafusion::{arrow::{record_batch::RecordBatch, datatypes::{Schema, Field, DataType}, array::BooleanArray}, common::TermMeta, from_slice::FromSlice, sql::TableReference};
+use datafusion::{arrow::{record_batch::RecordBatch, datatypes::{Schema, Field, DataType}, array::{BooleanArray, UInt16Array}}, common::TermMeta, from_slice::FromSlice, sql::TableReference};
 use futures::Future;
 use learned_term_idx::TermIdx;
 use rand::{thread_rng, seq::IteratorRandom};
@@ -183,13 +183,13 @@ impl TermMetaBuilder {
     }
 
     fn add_idx(&mut self, idx: (u16, u16)) {
-        self.idx.push(idx)
+        self.idx[idx.0 as usize] = Some(idx.1);
     }
 
     fn build(self) -> TermMeta {
         TermMeta {
             distribution: Arc::new(BooleanArray::from_slice(&self.distribution)),
-            index: vec![],
+            index: Arc::new(UInt16Array::from(self.idx)),
             nums: self.nums,
             selectivity: 0.,
         }

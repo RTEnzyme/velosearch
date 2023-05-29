@@ -86,13 +86,14 @@ impl BooleanPhysicalPlanner {
                 }
                 LogicalPlan::Projection(Projection { input, expr, ..}) => {
                     let input_exec = self.create_boolean_plan(input, session_state).await?;
-                    let input_schema = input.as_ref().schema();
+                    let input_dfschema = input.as_ref().schema();
+                    let input_schema: Arc<Schema> = input_exec.schema();
 
                     let physical_exprs = expr
                         .iter()
                         .map(|e| {
                             let physical_name = if let Expr::Column(col) = e {
-                                    match input_schema.index_of_column(col) {
+                                    match input_schema.index_of(&col.name) {
                                         Ok(idx) => {
                                             // index physical field using logical fields index
                                             Ok(input_exec.schema().field(idx).name().to_string())
@@ -108,8 +109,8 @@ impl BooleanPhysicalPlanner {
                                 tuple_err((
                                     self.create_physical_expr(
                                         e,
-                                        input_schema,
-                                        &input_exec.schema(),
+                                        input_dfschema,
+                                        &input_schema,
                                         session_state,
                                     ),
                                     physical_name,
@@ -291,7 +292,9 @@ fn create_physical_expr(
             execution_props,
         )?),
         Expr::Column(c) => {
-            let idx = input_dfschema.index_of_column(c)?;
+            debug!("input column: {:?}", input_schema);
+            let idx = input_schema.index_of(&c.name)?;
+            debug!("column {:?} idx: {:}", c, idx);
             Ok(Arc::new(Column::new(&c.name, idx)))
         }
         Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),

@@ -233,7 +233,7 @@ pub mod tests {
         let batch = PostingBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(UInt16Array::from_iter_values((0..32).into_iter())),
+                Arc::new(UInt16Array::from_iter_values((0..20).into_iter())),
                 Arc::new(UInt16Array::from_slice([0, 2, 6, 8, 15])),
                 Arc::new(UInt16Array::from_slice([0, 4, 6, 13, 17])),
                 Arc::new(UInt16Array::from_slice([3, 7, 11, 17, 19])),
@@ -246,31 +246,31 @@ pub mod tests {
         term_idx.insert("a".to_string(), TermMeta {
             distribution: Arc::new(BooleanArray::from_slice(&[true])),
             nums: 5,
-            index: vec![(0, 1)],
+            index: Arc::new(UInt16Array::from(vec![Some(1)])),
             selectivity: 0.,
         });
         term_idx.insert("b".to_string(), TermMeta {
             distribution: Arc::new(BooleanArray::from_slice(&[true])),
             nums: 5,
-            index: vec![(0, 2)],
+            index: Arc::new(UInt16Array::from(vec![Some(2)])),
             selectivity: 0.,
         });
         term_idx.insert("c".to_string(), TermMeta {
             distribution: Arc::new(BooleanArray::from_slice(&[true])),
             nums: 5,
-            index: vec![(0, 3)],
+            index: Arc::new(UInt16Array::from(vec![Some(3)])),
             selectivity: 0.,
         });
         term_idx.insert("d".to_string(), TermMeta {
             distribution: Arc::new(BooleanArray::from_slice(&[true])),
             nums: 5,
-            index: vec![(0, 4)],
+            index: Arc::new(UInt16Array::from(vec![Some(4)])),
             selectivity: 0.
         });
         term_idx.insert("__id__".to_string(), TermMeta {
             distribution: Arc::new(BooleanArray::from_slice(&[false])),
             nums: 0,
-            index: vec![],
+            index: Arc::new(UInt16Array::from(vec![Some(0)])),
             selectivity: 0.,
         });
 
