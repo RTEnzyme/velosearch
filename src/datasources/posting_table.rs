@@ -229,7 +229,7 @@ pub struct PostingStream {
     /// TermIdx
     term_idx: Arc<TermIdx<TermMeta>>,
     /// project_idx
-    project_idx: Vec<Vec<Option<u16>>>,
+    project_idx: Vec<Vec<Option<usize>>>,
 }
 
 impl PostingStream {
@@ -260,9 +260,11 @@ impl PostingStream {
         let mut project_idx = vec![vec![]; distr[0].len()];
         for terms in distr {
             for (i, term) in terms.into_iter().enumerate() {
-                project_idx[i].push(term);
+                project_idx[i].push(term.map(|v| v as usize))
             }
         }
+
+        let schema = Arc::new(schema.project(projection.as_ref().unwrap())?);
         
         Ok(Self {
             data: valid_data,
@@ -289,9 +291,9 @@ impl Stream for PostingStream {
         let batch = {
                 let indices = self.project_idx[self.index - 1];
                 if self.is_via {
-                    batch.project_fold(indices).map_err(|e| DataFusionError::Execution(e.to_string()))?
+                    batch.project_fold(indices.as_slice(), self.schema).map_err(|e| DataFusionError::Execution(e.to_string()))?
                 } else {
-                    batch.project_adapt(indices).map_err(|e| DataFusionError::Execution(e.to_string()))?
+                    batch.project_adapt(indices.as_slice(), self.schema).map_err(|e| DataFusionError::Execution(e.to_string()))?
                 }
             };
         Some(Ok(batch))

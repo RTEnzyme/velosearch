@@ -1,7 +1,6 @@
 use std::{sync::{Arc, RwLock}, ops::Index, collections::HashMap, cmp::max};
 
-use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray}, record_batch::RecordBatch}, from_slice::FromSlice, common::TermMeta};
-use learned_term_idx::TermIdx;
+use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray}, record_batch::RecordBatch}, from_slice::FromSlice};
 use crate::utils::{Result, FastErr};
 
 /// 
@@ -92,45 +91,37 @@ impl PostingBatch {
         )
     }
 
-    pub fn project_adapt(&self, indices: &[Option<usize>]) -> Result<RecordBatch> {
-        let mut projected_fields: Vec<Field> = indices
-            .into_iter()
-            .map(|f| {
-                self.schema.fields.get(*f).cloned().unwrap()
-            }).collect();
-        projected_fields.push(Field::new("__id__", DataType::UInt32, false));
-
-        let projected_schema = Schema::new(projected_fields);
+    pub fn project_adapt(&self, indices: &[Option<usize>], projected_schema: SchemaRef) -> Result<RecordBatch> {
         let mut batches: Vec<ArrayRef> = indices
             .into_iter()
-            .map(|v| self.postings[*v].clone() as ArrayRef)
+            .map(|v| match v {
+                Some(v) => self.postings[*v].clone() as ArrayRef,
+                None => Arc::new(UInt16Array::from_slice(&[])),
+        })
             .collect();
         batches.push(Arc::new(UInt32Array::from_slice(&[])));
         
         Ok(RecordBatch::try_new(
-            Arc::new(projected_schema),
+            projected_schema,
             batches,
         )?)
     }
 
-    pub fn project_fold(&self, indices: &[Option<usize>]) -> Result<RecordBatch> {
-        let mut projected_fields: Vec<Field> = indices
-            .into_iter()
-            .map(|f| {
-                self.schema.fields[*f].clone()
-            }).collect();
-        projected_fields.push(Field::new("__id__", DataType::UInt32, false));
-
-        let projected_schema = Schema::new(projected_fields);
+    pub fn project_fold(&self, indices: &[Option<usize>], projected_schema: SchemaRef) -> Result<RecordBatch> {
         let bitmask_size: usize = self.range.len() as usize;
         let mut batches: Vec<ArrayRef> = Vec::with_capacity(indices.len());
         for idx in indices {
             // To be optimized, we can convert bitvec to BooleanArray
             let mut bitmap = vec![false; bitmask_size];
-            let posting = self.postings.get(*idx).cloned().ok_or_else(|| {
+            if idx.is_none() {
+                batches.push(Arc::new(BooleanArray::from(bitmap)));
+                continue;
+            }
+            let idx = idx.unwrap();
+            let posting = self.postings.get(idx).cloned().ok_or_else(|| {
                 FastErr::InternalErr(format!(
                     "project index {} out of bounds, max field {}",
-                    *idx,
+                    idx,
                     self.postings.len()
                 ))
             })?;
@@ -142,7 +133,7 @@ impl PostingBatch {
             batches.push(Arc::new(BooleanArray::from(bitmap)));
         }
         batches.push(Arc::new(UInt32Array::from_iter_values((self.range.start).. (self.range.start + 32 * self.range.nums32))));
-        Ok(RecordBatch::try_new(Arc::new(projected_schema), batches)?)
+        Ok(RecordBatch::try_new(projected_schema, batches)?)
     }
 
     pub fn schema(&self) -> TermSchemaRef {
@@ -303,8 +294,15 @@ mod test {
 
     #[test]
     fn postingbatch_project_fold() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("test1", DataType::Boolean, true),
+            Field::new("test2", DataType::Boolean, true),
+            Field::new("test3", DataType::Boolean, true),
+            Field::new("test4", DataType::Boolean, true),
+            Field::new("__id__", DataType::UInt32, false),
+        ]));
         let batch = build_batch();
-        let res = batch.project_fold(&[1, 2]).unwrap();
+        let res = batch.project_fold(&[Some(1), Some(2)], schema.clone()).unwrap();
         let mut exptected1 = vec![false; 64];
         exptected1[0] = true;
         exptected1[4] = true;
