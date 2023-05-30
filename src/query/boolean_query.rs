@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use datafusion::{
-    prelude::{col, lit, Expr, boolean_or, boolean_and}, 
-    logical_expr::{Operator, LogicalPlan, LogicalPlanBuilder}, 
+    prelude::{col, Expr, boolean_or, boolean_and}, 
+    logical_expr::{LogicalPlan, LogicalPlanBuilder}, 
     execution::context::{SessionState, TaskContext}, 
     error::DataFusionError, 
     physical_plan::{ExecutionPlan, collect}, 

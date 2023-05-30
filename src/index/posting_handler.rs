@@ -8,7 +8,7 @@ use rand::{thread_rng, seq::IteratorRandom};
 use tokio::time::Instant;
 use tracing::{info, span, Level};
 
-use crate::{utils::json::{parse_wiki_dir, WikiItem}, Result, batch::{PostingBatch, PostingBatchBuilder, BatchRange}, datasources::posting_table::PostingTable, BooleanContext, query::boolean_query::BooleanPredicateBuilder};
+use crate::{utils::json::{parse_wiki_dir, WikiItem}, Result, batch::{PostingBatch, PostingBatchBuilder, BatchRange, TermMetaBuilder}, datasources::posting_table::PostingTable, BooleanContext, query::boolean_query::BooleanPredicateBuilder};
 
 use super::{HandlerT, boolean_query_handler::register_index};
 
@@ -159,39 +159,3 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
     )
 }
 
-struct TermMetaBuilder {
-    distribution: Vec<bool>,
-    nums: u32,
-    idx: Vec<Option<u16>>,
-}
-
-impl TermMetaBuilder {
-    fn new(batch_num: usize) -> Self {
-        Self {
-            distribution: vec![false; batch_num],
-            nums: 0,
-            idx: vec![None; batch_num],
-        }
-    }
-
-    fn set_true(&mut self, i: usize) {
-        if self.distribution[i] {
-            return;
-        }
-        self.nums += 1;
-        self.distribution[i] = true;
-    }
-
-    fn add_idx(&mut self, idx: (u16, u16)) {
-        self.idx[idx.0 as usize] = Some(idx.1);
-    }
-
-    fn build(self) -> TermMeta {
-        TermMeta {
-            distribution: Arc::new(BooleanArray::from_slice(&self.distribution)),
-            index: Arc::new(UInt16Array::from(self.idx)),
-            nums: self.nums,
-            selectivity: 0.,
-        }
-    }
-}

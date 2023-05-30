@@ -1,6 +1,7 @@
 use std::{sync::{Arc, RwLock}, ops::Index, collections::HashMap, cmp::max};
 
-use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray}, record_batch::RecordBatch}, from_slice::FromSlice};
+use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray}, record_batch::RecordBatch}, from_slice::FromSlice, common::TermMeta};
+use learned_term_idx::TermIdx;
 use crate::utils::{Result, FastErr};
 
 /// 
@@ -238,6 +239,66 @@ impl PostingBatchBuilder {
             Arc::new(Schema::new(schema_list)),
             postings,
             Arc::new(BatchRange::new(self.start, self.current + 1)))
+    }
+
+    pub fn build_with_idx(self, idx: &mut TermMetaBuilder, batch_idx: u16) -> Result<PostingBatch> {
+        let term_dict = self.term_dict
+            .into_inner()
+            .expect("Can't acquire the RwLock correctly");
+        let mut schema_list = Vec::new();
+        let mut postings = Vec::new();
+        term_dict
+            .into_iter()
+            .enumerate()
+            .for_each(|(i, (k, v))| {
+                idx.add_idx((batch_idx, i as u16));
+                schema_list.push(Field::new(k, DataType::UInt32, false));
+                postings.push(Arc::new(UInt16Array::from(v)));
+            });
+        schema_list.push(Field::new("__id__", DataType::UInt32, false));
+        postings.push(Arc::new(UInt16Array::from_slice(&[])));
+        PostingBatch::try_new(
+            Arc::new(Schema::new(schema_list)),
+            postings,
+            Arc::new(BatchRange::new(self.start, self.current + 1))
+        )
+    }
+}
+
+pub struct TermMetaBuilder {
+    distribution: Vec<bool>,
+    nums: u32,
+    idx: Vec<Option<u16>>,
+}
+
+impl TermMetaBuilder {
+    pub fn new(batch_num: usize) -> Self {
+        Self {
+            distribution: vec![false; batch_num],
+            nums: 0,
+            idx: vec![None; batch_num],
+        }
+    }
+
+    pub fn set_true(&mut self, i: usize) {
+        if self.distribution[i] {
+            return;
+        }
+        self.nums += 1;
+        self.distribution[i] = true;
+    }
+
+    pub fn add_idx(&mut self, idx: (u16, u16)) {
+        self.idx[idx.0 as usize] = Some(idx.1);
+    }
+
+    pub fn build(self) -> TermMeta {
+        TermMeta {
+            distribution: Arc::new(BooleanArray::from_slice(&self.distribution)),
+            index: Arc::new(UInt16Array::from(self.idx)),
+            nums: self.nums,
+            selectivity: 0.,
+        }
     }
 }
 
