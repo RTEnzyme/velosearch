@@ -1,16 +1,15 @@
-use std::{pin::Pin, collections::HashSet, sync::Arc};
+use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
-use datafusion::{arrow::{record_batch::RecordBatch, datatypes::{Schema, Field, DataType}, array::{BooleanArray, UInt16Array}}, common::TermMeta, from_slice::FromSlice, sql::TableReference};
-use futures::Future;
+use datafusion::{arrow::{datatypes::{Schema, Field, DataType}}, sql::TableReference};
 use learned_term_idx::TermIdx;
 use rand::{thread_rng, seq::IteratorRandom};
 use tokio::time::Instant;
-use tracing::{info, span, Level};
+use tracing::{info, span, Level, debug};
 
-use crate::{utils::json::{parse_wiki_dir, WikiItem}, Result, batch::{PostingBatch, PostingBatchBuilder, BatchRange, TermMetaBuilder}, datasources::posting_table::PostingTable, BooleanContext, query::boolean_query::BooleanPredicateBuilder};
+use crate::{utils::json::{parse_wiki_dir, WikiItem}, Result, batch::{PostingBatchBuilder, BatchRange, TermMetaBuilder}, datasources::posting_table::PostingTable, BooleanContext, query::boolean_query::BooleanPredicateBuilder};
 
-use super::{HandlerT, boolean_query_handler::register_index};
+use super::HandlerT;
 
 pub struct PostingHandler {
     doc_len: usize,
@@ -58,7 +57,7 @@ impl PostingHandler {
 
 #[async_trait]
 impl HandlerT for PostingHandler {
-    fn get_words(&self,num:u32) -> Vec<String>  {
+    fn get_words(&self, _num:u32) -> Vec<String>  {
         self.test_case.clone()
     }
 
@@ -71,25 +70,32 @@ impl HandlerT for PostingHandler {
         let table = ctx.index("__table__").await?;
         let mut test_iter = self.test_case.clone().into_iter();
 
-        let mut handlers = Vec::with_capacity(20);
-        let time = Instant::now();
+        // let mut handlers = Vec::with_capacity(20);
+        debug!("======================start!===========================");
         let mut cnt = 0;
-        for _ in 0..1 {
+        // for _ in 0..1 {
             let keys = test_iter.by_ref().take(5).collect::<Vec<String>>();
             cnt += 1;
             let table = table.clone();
             let predicate = BooleanPredicateBuilder::should(&[&keys[0], &keys[1]]).unwrap();
             let predicate1 = BooleanPredicateBuilder::must(&[&keys[2], &keys[3], &keys[4]]).unwrap();
             let predicate = predicate.with_must(predicate1).unwrap();
-            handlers.push(tokio::spawn(async move {
-                table.boolean_predicate(predicate.build()).unwrap()
+            let predicate = predicate.build();
+            let time = Instant::now();
+            // handlers.push(tokio::spawn(async move {
+                debug!("start construct query");
+                ctx.boolean("__table__", predicate).await.unwrap()
                     .collect().await.unwrap();
-            }))
-        }
+                // table.boolean_predicate(predicate).unwrap()
+                //     .collect().await.unwrap();
+                    // .explain(false, true).unwrap()
+                    // .show().await.unwrap();
+            // }))
+        // }
 
-        for handle in handlers {
-            handle.await.unwrap();
-        }
+        // for handle in handlers {
+        //     handle.await.unwrap();
+        // }
         let query_time = time.elapsed().as_millis();
         info!("query time: {}", query_time / cnt);
         Ok(())
@@ -132,7 +138,6 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
                     info!("Start build ({}, {}) batch", current.0, current.1);
                 } else if thredhold % BATCH_SIZE == 0{
                     current.1 += 1;
-                    entry.add_idx((0, current.1.try_into().unwrap()));
                 }
                 thredhold += BATCH_SIZE;
             }
@@ -141,7 +146,11 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
         });
     let partition_batch = partition_batch
         .into_iter()
-        .map(|b| b.into_iter().map(|b| b.build_single().unwrap() ).collect())
+        .zip(term_idx.iter_mut())
+        .map(|(b, t)| b
+            .into_iter()
+            .enumerate()
+            .map(|(i, b)| b.build_with_idx(t, i as u16).unwrap() ).collect())
         .collect();
 
     let term_idx = term_idx

@@ -5,7 +5,7 @@ use datafusion::{
     physical_plan::{
         PhysicalPlanner, ExecutionPlan, PhysicalExpr, 
         expressions::{Column, Literal, binary, self}, 
-        explain::ExplainExec, projection::ProjectionExec, boolean::BooleanExec, displayable}, 
+        explain::ExplainExec, projection::ProjectionExec, boolean::BooleanExec, displayable, analyze::AnalyzeExec}, 
         execution::context::SessionState, error::{Result, DataFusionError}, 
         logical_expr::{
             LogicalPlan, expr::BooleanQuery, BinaryExpr, PlanType, ToStringifiedPlan, Projection, TableScan, expr_rewriter::unnormalize_cols, StringifiedPlan, Operator
@@ -140,7 +140,11 @@ impl BooleanPhysicalPlanner {
                         .collect();
                     Ok(Arc::new(BooleanExec::try_new(partition_predicate, physical_input, None, None)?))
                 }
-
+                LogicalPlan::Analyze(a) => {
+                    let input = self.create_boolean_plan(&a.input, session_state).await?;
+                    let schema = SchemaRef::new((*a.schema).clone().into());
+                    Ok(Arc::new(AnalyzeExec::new(a.verbose, input, schema)))
+                }
                 _ => unreachable!("Don't support LogicalPlan {:?} in BooleanPlanner", logical_plan),
             };
             exec_plan
@@ -292,9 +296,7 @@ fn create_physical_expr(
             execution_props,
         )?),
         Expr::Column(c) => {
-            debug!("input column: {:?}", input_schema);
             let idx = input_schema.index_of(&c.name)?;
-            debug!("column {:?} idx: {:}", c, idx);
             Ok(Arc::new(Column::new(&c.name, idx)))
         }
         Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),

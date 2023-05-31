@@ -1,12 +1,12 @@
-use std::sync::Arc;
+use std::{sync::Arc, collections::HashMap};
 
 use datafusion::{
     prelude::{col, Expr, boolean_or, boolean_and}, 
-    logical_expr::{LogicalPlan, LogicalPlanBuilder}, 
+    logical_expr::{LogicalPlan, LogicalPlanBuilder, ExprSchemable, Projection}, 
     execution::context::{SessionState, TaskContext}, 
     error::DataFusionError, 
     physical_plan::{ExecutionPlan, collect}, 
-    arrow::{record_batch::RecordBatch, util::pretty}
+    arrow::{record_batch::RecordBatch, util::pretty, datatypes::DataType}, common::{DFSchema, DFSchemaRef, DFField}, datasource::TableProvider
 };
 use tracing::debug;
 
@@ -100,15 +100,25 @@ impl BooleanQuery {
 
     /// Create BooleanQuery based on a bitwise binary operation expression
     pub fn boolean_predicate(self, predicate: Expr) -> Result<Self> {
+        debug!("Build boolean_predicate");
         let mut project_exprs = binary_expr_columns(&predicate);
         project_exprs.push(col("__id__"));
+        let input_schema = DFSchema {
+            fields: project_exprs.iter().map(|e| if let Expr::Column(c) = e {
+                DFField::new(c.relation.as_ref().map(|v| v.as_str()), &c.name, DataType::Boolean, false)
+            } else {
+                unreachable!()
+            }).collect(),
+            metadata: HashMap::new(),
+        };
         match predicate {
             Expr::BooleanQuery(expr) => {
-                let project_plan = LogicalPlanBuilder::from(self.plan).project(project_exprs)?.build()?;
+                let project_plan = boolean_project(self.plan, project_exprs, input_schema).unwrap();
+                let project_plan = LogicalPlanBuilder::from(project_plan).build()?;
                 Ok(Self {
-                plan: LogicalPlanBuilder::from(project_plan).boolean(Expr::BooleanQuery(expr))?.build()?,
-                session_state: self.session_state 
-            })
+                    plan: LogicalPlanBuilder::from(project_plan).boolean(Expr::BooleanQuery(expr))?.build()?,
+                    session_state: self.session_state 
+                })
             },
             _ => Err(FastErr::UnimplementErr("Predicate expression must be the BinaryExpr".to_string()))
         }   
@@ -126,6 +136,7 @@ impl BooleanQuery {
     /// if `analyze` is specified, runs the plan and reports metrics
     /// 
     pub fn explain(self, verbose: bool, analyze: bool) -> Result<BooleanQuery> {
+        debug!("explain verbose: {:}, analyze: {:}", verbose, analyze);
         let plan = LogicalPlanBuilder::from(self.plan)
             .explain(verbose, analyze)?
             .build()?;
@@ -157,7 +168,7 @@ impl BooleanQuery {
 
 }
 
-fn binary_expr_columns(be: &Expr) -> Vec<Expr> {
+pub fn binary_expr_columns(be: &Expr) -> Vec<Expr> {
     debug!("Binary expr columns: {:?}", be);
     match be {
         Expr::BooleanQuery(b) => {
@@ -173,6 +184,20 @@ fn binary_expr_columns(be: &Expr) -> Vec<Expr> {
     }
 }
 
+pub fn boolean_project(
+        plan: LogicalPlan,
+        expr: impl IntoIterator<Item = impl Into<Expr>>,
+        input_dfschema: DFSchema,
+    ) -> datafusion::common::Result<LogicalPlan> {
+        let projected_expr: Vec<Expr> = expr.into_iter().map(|e| e.into()).collect();
+
+        Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+            projected_expr,
+            Arc::new(plan.clone()),
+            DFSchemaRef::new(input_dfschema),
+        )?))
+    }
+
 
 #[cfg(test)]
 pub mod tests {
@@ -185,7 +210,7 @@ pub mod tests {
     use datafusion::from_slice::FromSlice;
     use datafusion::prelude::col;
     use learned_term_idx::TermIdx;
-    use tracing::Level;
+    use tracing::{Level};
     use crate::batch::{BatchRange, PostingBatch};
     use crate::{utils::Result, BooleanContext, datasources::posting_table::PostingTable};
 
@@ -223,6 +248,8 @@ pub mod tests {
             .collect()
         )
     }
+
+    
 
     #[tokio::test]
     async fn simple_query() -> Result<()> {

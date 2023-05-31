@@ -4,12 +4,13 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion::{
     execution::{context::{SessionState, QueryPlanner}, runtime_env::RuntimeEnv}, 
-    prelude::SessionConfig, sql::TableReference, logical_expr::{LogicalPlanBuilder, LogicalPlan}, 
+    prelude::{SessionConfig, Expr, Column, col}, sql::TableReference, logical_expr::{LogicalPlanBuilder, LogicalPlan}, 
     datasource::{provider_as_source, TableProvider}, error::DataFusionError, 
     optimizer::{OptimizerRule, rewrite_disjunctive_predicate::RewriteDisjunctivePredicate, push_down_projection::PushDownProjection, simplify_expressions::SimplifyExpressions}, 
     physical_optimizer::PhysicalOptimizerRule, scalar::ScalarValue, physical_plan::{PhysicalPlanner, ExecutionPlan}
 };
 use parking_lot::RwLock;
+use tracing::debug;
 
 use crate::{query::boolean_query::BooleanQuery, utils::FastErr, BooleanPhysicalPlanner, IntersectionSelection, MinOperationRange, PartitionPredicateReorder};
 use crate::utils::Result;
@@ -86,6 +87,36 @@ impl BooleanContext {
         Ok(BooleanQuery::new(plan, self.state()))
     }
 
+    /// Return BooleanQuery with index and predicate
+    pub async fn boolean<'a>(
+        &self,
+        index_ref: impl Into<TableReference<'a>>,
+        predicate: Expr,
+    ) -> Result<BooleanQuery> {
+        let index_ref = index_ref.into();
+        let index = index_ref.table().to_owned();
+        let provider = self.index_provider(index_ref).await?;
+        let schema = &provider.schema();
+        let project_exprs = [binary_expr_columns(&predicate), vec![Column::from_name("__id__")]].concat();
+        let project = project_exprs
+            .iter()
+            .map(|e| schema.index_of(&e.name).unwrap())
+            .collect();
+        if let Expr::BooleanQuery(expr) = predicate {
+            let plan = LogicalPlanBuilder::scan(
+                &index,
+                provider_as_source(Arc::clone(&provider)),
+                Some(project),
+            )?.boolean(Expr::BooleanQuery(expr))?.build()?;
+            Ok(BooleanQuery::new(
+                plan,
+                self.state(),
+            ))
+        } else {
+            Err(FastErr::UnimplementErr(format!("")))
+        }
+    }
+
     /// Return a [`IndexProvider`] for the specified table.
     pub async fn index_provider<'a>(
         &self,
@@ -146,7 +177,7 @@ fn optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Sync + Send>> {
         // Arc::new(EliminateFilter::new()),
         // Arc::new(PushDownFilter::new()),
         // Arc::new(SimplifyExpressions::new()),
-        Arc::new(PushDownProjection::new())
+        // Arc::new(PushDownProjection::new())
     ]
 }
 
@@ -176,5 +207,21 @@ impl QueryPlanner for BooleanPlanner {
         planner
             .create_physical_plan(logical_plan, session_state)
             .await
+    }
+}
+
+pub fn binary_expr_columns(be: &Expr) -> Vec<Column> {
+    debug!("Binary expr columns: {:?}", be);
+    match be {
+        Expr::BooleanQuery(b) => {
+            let mut left_columns = binary_expr_columns(&b.left);
+            left_columns.extend(binary_expr_columns(&b.right));
+            left_columns
+        },
+        Expr::Column(c) => {
+            vec![c.clone()]
+        },
+        Expr::Literal(_) => { Vec::new() },
+        _ => unreachable!()
     }
 }

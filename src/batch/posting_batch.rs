@@ -241,7 +241,7 @@ impl PostingBatchBuilder {
             Arc::new(BatchRange::new(self.start, self.current + 1)))
     }
 
-    pub fn build_with_idx(self, idx: &mut TermMetaBuilder, batch_idx: u16) -> Result<PostingBatch> {
+    pub fn build_with_idx(self, idx: &mut TermIdx<TermMetaBuilder>, batch_idx: u16) -> Result<PostingBatch> {
         let term_dict = self.term_dict
             .into_inner()
             .expect("Can't acquire the RwLock correctly");
@@ -251,7 +251,7 @@ impl PostingBatchBuilder {
             .into_iter()
             .enumerate()
             .for_each(|(i, (k, v))| {
-                idx.add_idx((batch_idx, i as u16));
+                idx.term_map.get_mut(&k).unwrap().add_idx((batch_idx, i as u16));
                 schema_list.push(Field::new(k, DataType::UInt32, false));
                 postings.push(Arc::new(UInt16Array::from(v)));
             });

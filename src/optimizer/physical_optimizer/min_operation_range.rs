@@ -109,16 +109,13 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                             projected_schema.clone(),
                             range,
                         ).unwrap();
-                        debug!("eval batch: {:?}", batch);
                         let eval = self.predicate.as_ref().unwrap().eval(batch).unwrap();
-                        debug!("eval result: {:?}", eval);
                         eval
                     } else {
                         Arc::new(BooleanArray::from_slice(&[]))
                     }
                 })
                 .collect();
-            debug!("min_partition_range: {:?}", partition_range);
             let term_stats: Vec<Vec<Option<TermMeta>>> = term_stats
                 .into_iter()
                 .zip(partition_range.iter())
@@ -139,7 +136,6 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                     .collect()
                 })
                 .collect();
-            debug!("term_stats: {:?}", term_stats);
             self.min_range = Some(partition_range);
             self.partition_stats = Some(term_stats);
             Ok(RewriteRecursion::Continue)

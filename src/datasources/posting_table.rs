@@ -5,7 +5,7 @@ use datafusion::{
     arrow::{datatypes::{SchemaRef, Schema, Field, DataType}, record_batch::RecordBatch, array::{BooleanArray, UInt16Array}, compute::filter}, 
     datasource::TableProvider, 
     logical_expr::TableType, execution::context::SessionState, prelude::Expr, error::{Result, DataFusionError}, 
-    physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream}, common::TermMeta};
+    physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream, metrics::{ExecutionPlanMetricsSet, BaselineMetrics, MetricsSet}}, common::TermMeta};
 use futures::Stream;
 use learned_term_idx::TermIdx;
 use tracing::debug;
@@ -91,6 +91,7 @@ pub struct PostingExec {
     pub projection: Option<Vec<usize>>,
     pub partition_min_range: Option<Vec<Arc<BooleanArray>>>,
     pub is_via: Option<Vec<bool>>,
+    metric: ExecutionPlanMetricsSet,
 }
 
 impl std::fmt::Debug for PostingExec {
@@ -147,6 +148,7 @@ impl ExecutionPlan for PostingExec {
             self.is_via.as_ref().map_or(false, |v| v[partition]),
             self.partition_min_range.as_ref().unwrap()[partition].clone(),
             self.term_idx[partition].clone(),
+            BaselineMetrics::new(&self.metric, partition),
         )?))
     }
 
@@ -166,6 +168,10 @@ impl ExecutionPlan for PostingExec {
                 )
             }
         }
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metric.clone_inner())
     }
 
     fn statistics(&self) -> datafusion::physical_plan::Statistics {
@@ -199,6 +205,7 @@ impl PostingExec {
             projection,
             partition_min_range,
             is_via,
+            metric: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -230,6 +237,8 @@ pub struct PostingStream {
     term_idx: Arc<TermIdx<TermMeta>>,
     /// project_idx
     project_idx: Vec<Vec<Option<usize>>>,
+    /// metric
+    metric: BaselineMetrics,
 }
 
 impl PostingStream {
@@ -241,6 +250,7 @@ impl PostingStream {
         is_via: bool,
         min_range: Arc<BooleanArray>,
         term_idx: Arc<TermIdx<TermMeta>>,
+        metric: BaselineMetrics,
     ) -> Result<Self> {
         // project_fold传入&[Option<usize>]和projected_schema
         let valid_data = data.into_iter()
@@ -248,14 +258,18 @@ impl PostingStream {
             .filter(|(_, v)| v.unwrap())
             .map(|(d, _)| d)
             .collect();
+        let valid_cnt = min_range.true_count();
 
         let distr: Vec<UInt16Array> = schema.fields().into_iter()
             .map(|f| f.name())
             .filter(|f| *f != "__id__")
-            .map(|f| term_idx.get(f).unwrap().index.clone())
-            .map(|f| 
-                filter(f.as_ref(), &min_range).unwrap().as_any().downcast_ref::<UInt16Array>().unwrap().to_owned()
-            )
+            .map(|f| match term_idx.get(f) {
+                Some(v) => filter(
+                    v.index.as_ref(),
+                    &min_range,
+                ).unwrap().as_any().downcast_ref::<UInt16Array>().unwrap().to_owned(),
+                None => UInt16Array::from(vec![None; valid_cnt]),
+            })
             .collect();
         let mut project_idx = vec![vec![]; distr[0].len()];
         for terms in distr {
@@ -272,6 +286,7 @@ impl PostingStream {
             is_via,
             term_idx,
             project_idx,
+            metric,
         })
     }
 }
@@ -280,24 +295,26 @@ impl Stream for PostingStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(mut self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
-        Poll::Ready(if self.index < self.data.len() {
-        self.index += 1;
-        let batch = &self.data[self.index - 1];
+        let poll = Poll::Ready(if self.index < self.data.len() {
+            self.index += 1;
+            let batch = &self.data[self.index - 1];
 
-
-        // return just the columns requested
-        let batch = {
-                let indices = &self.project_idx[self.index - 1];
-                if self.is_via {
-                    batch.project_fold(indices.as_slice(), self.schema.clone()).map_err(|e| DataFusionError::Execution(e.to_string()))?
-                } else {
-                    batch.project_adapt(indices.as_slice(), self.schema.clone()).map_err(|e| DataFusionError::Execution(e.to_string()))?
-                }
-            };
-        Some(Ok(batch))
+            let timer = self.metric.elapsed_compute().timer();
+            // return just the columns requested
+            let batch = {
+                    let indices = &self.project_idx[self.index - 1];
+                    if self.is_via {
+                        batch.project_fold(indices.as_slice(), self.schema.clone()).map_err(|e| DataFusionError::Execution(e.to_string()))?
+                    } else {
+                        batch.project_adapt(indices.as_slice(), self.schema.clone()).map_err(|e| DataFusionError::Execution(e.to_string()))?
+                    }
+                };
+            timer.done();
+            Some(Ok(batch))
         } else {
-        None
-        }) 
+            None
+        });
+        self.metric.record_poll(poll)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
