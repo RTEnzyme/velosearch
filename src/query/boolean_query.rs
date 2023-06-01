@@ -2,12 +2,13 @@ use std::{sync::Arc, collections::HashMap};
 
 use datafusion::{
     prelude::{col, Expr, boolean_or, boolean_and}, 
-    logical_expr::{LogicalPlan, LogicalPlanBuilder, ExprSchemable, Projection}, 
+    logical_expr::{LogicalPlan, LogicalPlanBuilder, Projection}, 
     execution::context::{SessionState, TaskContext}, 
     error::DataFusionError, 
     physical_plan::{ExecutionPlan, collect}, 
-    arrow::{record_batch::RecordBatch, util::pretty, datatypes::DataType}, common::{DFSchema, DFSchemaRef, DFField}, datasource::TableProvider
+    arrow::{record_batch::RecordBatch, util::pretty, datatypes::DataType}, common::{DFSchema, DFSchemaRef, DFField}
 };
+use tokio::time::Instant;
 use tracing::debug;
 
 use crate::{Result, utils::FastErr};
@@ -159,7 +160,10 @@ impl BooleanQuery {
         debug!("Create physical plan");
         let plan = self.create_physical_plan().await?;
         debug!("Finish physical plan");
-        collect(plan, task_ctx).await.map_err(|e| FastErr::DataFusionErr(e))
+        let timer = Instant::now();
+        let res = collect(plan, task_ctx).await.map_err(|e| FastErr::DataFusionErr(e));
+        debug!("Result Collect took {} ms", timer.elapsed().as_millis());
+        res
     }
 
     fn task_ctx(&self) -> TaskContext {
@@ -305,7 +309,7 @@ pub mod tests {
         session_ctx.register_index("t", Arc::new(PostingTable::new(
             schema.clone(),
             vec![Arc::new(term_idx)],
-            vec![vec![batch]],
+            vec![Arc::new(vec![batch])],
             &BatchRange::new(0, 20)
         ))).unwrap();
 
@@ -315,6 +319,5 @@ pub mod tests {
             .show().await.unwrap();
         println!("{}", t.elapsed().as_nanos());
         panic!("");
-        Ok(())
     }
 }

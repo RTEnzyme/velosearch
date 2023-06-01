@@ -4,12 +4,13 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion::{
     execution::{context::{SessionState, QueryPlanner}, runtime_env::RuntimeEnv}, 
-    prelude::{SessionConfig, Expr, Column, col}, sql::TableReference, logical_expr::{LogicalPlanBuilder, LogicalPlan}, 
+    prelude::{SessionConfig, Expr, Column}, sql::TableReference, logical_expr::{LogicalPlanBuilder, LogicalPlan}, 
     datasource::{provider_as_source, TableProvider}, error::DataFusionError, 
-    optimizer::{OptimizerRule, rewrite_disjunctive_predicate::RewriteDisjunctivePredicate, push_down_projection::PushDownProjection, simplify_expressions::SimplifyExpressions}, 
+    optimizer::{OptimizerRule, rewrite_disjunctive_predicate::RewriteDisjunctivePredicate}, 
     physical_optimizer::PhysicalOptimizerRule, scalar::ScalarValue, physical_plan::{PhysicalPlanner, ExecutionPlan}
 };
 use parking_lot::RwLock;
+use tokio::time::Instant;
 use tracing::debug;
 
 use crate::{query::boolean_query::BooleanQuery, utils::FastErr, BooleanPhysicalPlanner, IntersectionSelection, MinOperationRange, PartitionPredicateReorder};
@@ -203,15 +204,17 @@ impl QueryPlanner for BooleanPlanner {
         logical_plan: &LogicalPlan,
         session_state: &SessionState,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+        let timer = Instant::now();
         let planner = BooleanPhysicalPlanner::default();
-        planner
+        let plan = planner
             .create_physical_plan(logical_plan, session_state)
-            .await
+            .await;
+        debug!("Physical Optimizer took {} ms", timer.elapsed().as_millis());
+        plan
     }
 }
 
 pub fn binary_expr_columns(be: &Expr) -> Vec<Column> {
-    debug!("Binary expr columns: {:?}", be);
     match be {
         Expr::BooleanQuery(b) => {
             let mut left_columns = binary_expr_columns(&b.left);

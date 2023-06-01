@@ -202,14 +202,14 @@ mod tests {
         };
     }
 
-    fn partition_batches() -> Vec<Vec<PostingBatch>> {
+    fn partition_batches() -> Vec<Arc<Vec<PostingBatch>>> {
         let schema = schema();
         let range1 = Arc::new(BatchRange::new(0, 10));
         let range2 = Arc::new(BatchRange::new(10, 20));
         let range3 = Arc::new(BatchRange::new(20, 30));
         let range4 = Arc::new(BatchRange::new(30, 40));
         vec![
-            vec![
+            Arc::new(vec![
                 PostingBatch::try_new(
                     schema.clone(),
                     vec![
@@ -228,8 +228,8 @@ mod tests {
                     ],
                     range2.clone(),
                 ).unwrap(),
-            ],
-            vec![
+            ]),
+            Arc::new(vec![
                 PostingBatch::try_new(
                     schema.clone(),
                     vec![
@@ -249,7 +249,7 @@ mod tests {
                     ],
                     range4.clone()
                 ).unwrap(),
-            ]
+            ]),
         ]
     }
 

@@ -85,6 +85,8 @@ impl HandlerT for PostingHandler {
             // handlers.push(tokio::spawn(async move {
                 debug!("start construct query");
                 ctx.boolean("__table__", predicate).await.unwrap()
+                    // .explain(false, true).unwrap()
+                    // .show().await.unwrap();
                     .collect().await.unwrap();
                 // table.boolean_predicate(predicate).unwrap()
                 //     .collect().await.unwrap();
@@ -97,12 +99,12 @@ impl HandlerT for PostingHandler {
         //     handle.await.unwrap();
         // }
         let query_time = time.elapsed().as_millis();
-        info!("query time: {}", query_time / cnt);
+        info!("Total time: {} ms", query_time / cnt);
         Ok(())
     }
 }
 
-const BATCH_SIZE: usize = 512;
+const BATCH_SIZE: usize = 6801;
 
 fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: usize) -> PostingTable {
     let _span = span!(Level::INFO, "PostingHanlder to_batch").entered();
@@ -126,6 +128,7 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
     }
     let mut current = (0, 0);
     let mut thredhold = BATCH_SIZE;
+    assert!(ids.is_sorted(), "ids must be sorted");
     words
         .into_iter()
         .zip(ids.into_iter())
@@ -135,7 +138,7 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
                 if thredhold % (BATCH_SIZE * num_512_partition) == 0 {
                     current.0 += 1;
                     current.1 = 0;
-                    info!("Start build ({}, {}) batch", current.0, current.1);
+                    info!("Start build ({}, {}) batch, current thredhold: {}", current.0, current.1, thredhold);
                 } else if thredhold % BATCH_SIZE == 0{
                     current.1 += 1;
                 }
@@ -147,10 +150,11 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
     let partition_batch = partition_batch
         .into_iter()
         .zip(term_idx.iter_mut())
-        .map(|(b, t)| b
+        .map(|(b, t)| Arc::new(
+            b
             .into_iter()
             .enumerate()
-            .map(|(i, b)| b.build_with_idx(t, i as u16).unwrap() ).collect())
+            .map(|(i, b)| b.build_with_idx(t, i as u16).unwrap()).collect()))
         .collect();
 
     let term_idx = term_idx

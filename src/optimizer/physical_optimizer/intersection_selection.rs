@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use datafusion::{physical_optimizer::PhysicalOptimizerRule, physical_plan::{ExecutionPlan, boolean::BooleanExec, rewrite::TreeNodeRewritable}, physical_expr::BooleanQueryExpr, error::DataFusionError};
+use datafusion::{physical_optimizer::PhysicalOptimizerRule, physical_plan::{ExecutionPlan, boolean::BooleanExec, rewrite::TreeNodeRewritable}, physical_expr::BooleanQueryExpr};
 use datafusion::common::Result;
 
 use crate::datasources::posting_table::PostingExec;

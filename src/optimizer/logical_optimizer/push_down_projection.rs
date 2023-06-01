@@ -44,9 +44,9 @@ impl PushDownProjection {
 /// Recursively transverses the logical plan removing expressions and that are not needed
 fn optimize_plan(
     _optimizer: &PushDownProjection,
-    plan: &LogicalPlan,
-    required_columns: &HashSet<Column>,
-    hash_join: bool,
+    _plan: &LogicalPlan,
+    _required_columns: &HashSet<Column>,
+    _hash_join: bool,
     _config: &dyn OptimizerConfig,
 ) -> Result<LogicalPlan> {
     unimplemented!()

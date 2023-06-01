@@ -16,7 +16,7 @@ use crate::batch::{PostingBatch, BatchRange, PostingBatchBuilder};
 pub struct PostingTable {
     schema: SchemaRef,
     term_idx: Vec<Arc<TermIdx<TermMeta>>>,
-    postings: Vec<Vec<PostingBatch>>,
+    postings: Vec<Arc<Vec<PostingBatch>>>,
     batch_builder: PostingBatchBuilder,
 }
 
@@ -24,7 +24,7 @@ impl PostingTable {
     pub fn new(
         schema: SchemaRef,
         term_idx: Vec<Arc<TermIdx<TermMeta>>>,
-        batches: Vec<Vec<PostingBatch>>,
+        batches: Vec<Arc<Vec<PostingBatch>>>,
         range: &BatchRange,
     ) -> Self {
         // construct field map to index the position of the fields in schema
@@ -71,6 +71,7 @@ impl TableProvider for PostingTable {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        debug!("PostingTable scan");
         Ok(Arc::new(PostingExec::try_new(
             self.postings.clone(), 
             self.term_idx.clone(),
@@ -84,7 +85,7 @@ impl TableProvider for PostingTable {
 
 #[derive(Clone)]
 pub struct PostingExec {
-    pub partitions: Vec<Vec<PostingBatch>>,
+    pub partitions: Vec<Arc<Vec<PostingBatch>>>,
     pub schema: SchemaRef,
     pub term_idx: Vec<Arc<TermIdx<TermMeta>>>,
     pub projected_schema: SchemaRef,
@@ -139,8 +140,9 @@ impl ExecutionPlan for PostingExec {
     fn execute(
             &self,
             partition: usize,
-            _context: Arc<datafusion::execution::context::TaskContext>,
+            context: Arc<datafusion::execution::context::TaskContext>,
         ) -> Result<datafusion::physical_plan::SendableRecordBatchStream> {
+        debug!("Start PostingExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         Ok(Box::pin(PostingStream::try_new(
             self.partitions[partition].clone(),
             self.projected_schema.clone(),
@@ -189,7 +191,7 @@ impl PostingExec {
     /// Create a new execution plan for reading in-memory record batches
     /// The provided `schema` shuold not have the projection applied.
     pub fn try_new(
-        partitions: Vec<Vec<PostingBatch>>,
+        partitions: Vec<Arc<Vec<PostingBatch>>>,
         term_idx: Vec<Arc<TermIdx<TermMeta>>>,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
@@ -224,19 +226,15 @@ impl PostingExec {
 
 pub struct PostingStream {
     /// Vector of recorcd batches
-    data: Vec<PostingBatch>,
+    data: Vec<RecordBatch>,
     /// Schema representing the data
     schema: SchemaRef,
     /// Optional projection for which columns to load
     projection: Option<Vec<usize>>,
-    /// Index into the data
-    index: usize,
     /// If use via
     is_via: bool,
     /// TermIdx
     term_idx: Arc<TermIdx<TermMeta>>,
-    /// project_idx
-    project_idx: Vec<Vec<Option<usize>>>,
     /// metric
     metric: BaselineMetrics,
 }
@@ -244,7 +242,7 @@ pub struct PostingStream {
 impl PostingStream {
     /// Create an iterator for a vector of record batches
     pub fn try_new(
-        data: Vec<PostingBatch>,
+        data: Arc<Vec<PostingBatch>>,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
         is_via: bool,
@@ -252,14 +250,8 @@ impl PostingStream {
         term_idx: Arc<TermIdx<TermMeta>>,
         metric: BaselineMetrics,
     ) -> Result<Self> {
-        // project_fold传入&[Option<usize>]和projected_schema
-        let valid_data = data.into_iter()
-            .zip(min_range.into_iter())
-            .filter(|(_, v)| v.unwrap())
-            .map(|(d, _)| d)
-            .collect();
+        debug!("Try new a PostingStream");
         let valid_cnt = min_range.true_count();
-
         let distr: Vec<UInt16Array> = schema.fields().into_iter()
             .map(|f| f.name())
             .filter(|f| *f != "__id__")
@@ -272,20 +264,32 @@ impl PostingStream {
             })
             .collect();
         let mut project_idx = vec![vec![]; distr[0].len()];
+        debug!("Obtain the project idx");
         for terms in distr {
             for (i, term) in terms.into_iter().enumerate() {
                 project_idx[i].push(term.map(|v| v as usize))
             }
         }
+        // project_fold传入&[Option<usize>]和projected_schema
+        let valid_data: Vec<RecordBatch> = data.as_ref().into_iter()
+            .zip(project_idx.into_iter())
+            .zip(min_range.into_iter())
+            .filter(|(_, v)| v.unwrap())
+            .map(|((d, p), _)| if is_via {
+                d.project_fold(&p, schema.clone()).map_err(|e| DataFusionError::Execution(e.to_string()))
+            } else {
+                d.project_adapt(&p, schema.clone()).map_err(|e| DataFusionError::Execution(e.to_string()))
+            })
+            .collect::<Result<_>>()?;
+        debug!("Obtain the valid distri");
         
+        debug!("Finish Trying new a PostingStream");
         Ok(Self {
             data: valid_data,
             schema,
             projection,
-            index: 0,
             is_via,
             term_idx,
-            project_idx,
             metric,
         })
     }
@@ -295,26 +299,15 @@ impl Stream for PostingStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(mut self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
-        let poll = Poll::Ready(if self.index < self.data.len() {
-            self.index += 1;
-            let batch = &self.data[self.index - 1];
-
-            let timer = self.metric.elapsed_compute().timer();
+        let poll = Poll::Ready(if self.data.len() > 0 {
+            let batch =self.data.remove(0);
             // return just the columns requested
-            let batch = {
-                    let indices = &self.project_idx[self.index - 1];
-                    if self.is_via {
-                        batch.project_fold(indices.as_slice(), self.schema.clone()).map_err(|e| DataFusionError::Execution(e.to_string()))?
-                    } else {
-                        batch.project_adapt(indices.as_slice(), self.schema.clone()).map_err(|e| DataFusionError::Execution(e.to_string()))?
-                    }
-                };
-            timer.done();
             Some(Ok(batch))
         } else {
             None
         });
-        self.metric.record_poll(poll)
+        debug!("Finish poll next batch");
+        poll
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -373,7 +366,7 @@ mod tests {
         let provider = PostingTable::new(
                 schema.clone(),
                 term_idx,
-                vec![vec![batch]],
+                vec![Arc::new(vec![batch])],
                 &range
             );
         return (schema, range, provider)
@@ -449,7 +442,7 @@ mod tests {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         let input = Arc::new(PostingExec::try_new(
-            vec![vec![batch]], 
+            vec![Arc::new(vec![batch])], 
             vec![Arc::new(TermIdx::new())], 
             schema.clone(), 
             Some(vec![1, 2, 4]),

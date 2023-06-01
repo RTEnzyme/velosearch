@@ -77,12 +77,13 @@ impl BooleanPhysicalPlanner {
                 }) => {
                     debug!("projection: {:?}", projection);
                     let source = source_as_provider(source)?;
+                    debug!("source as provider");
                     // Remove all qualifiers from the scan as the provider
                     // doesn't know (nor should care) how the relation was
                     // referred to in the query
-                    let filters = unnormalize_cols(filters.iter().cloned());
-                    let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
-                    source.scan(session_state, projection.as_ref(), &unaliased, *fetch).await
+                    // let filters = unnormalize_cols(filters.iter().cloned());
+                    // let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
+                    source.scan(session_state, projection.as_ref(), &filters, *fetch).await
                 }
                 LogicalPlan::Projection(Projection { input, expr, ..}) => {
                     let input_exec = self.create_boolean_plan(input, session_state).await?;
@@ -123,21 +124,24 @@ impl BooleanPhysicalPlanner {
                     )?))
                 }
                 LogicalPlan::Boolean(boolean) => {
+                    debug!("Create boolean plan");
                     let physical_input = self.create_boolean_plan(&boolean.input, session_state).await?;
                     let input_schema = physical_input.as_ref().schema();
                     let input_dfschema = boolean.input.schema();
-
+                    debug!("Create boolean predicate");
                     let runtime_expr = self.create_physical_expr(
                         &boolean.predicate,
                         input_dfschema,
                         &input_schema,
                         session_state,
                     )?;
+                    debug!("Optimize predicate on every partition");
                     // Should Optimize predicate on every partition.
                     let num_partition = physical_input.output_partitioning().partition_count();
                     let partition_predicate = (0..num_partition)
                         .map(|v| (v, runtime_expr.clone()))
                         .collect();
+                    debug!("Finish creating boolean physical plan");
                     Ok(Arc::new(BooleanExec::try_new(partition_predicate, physical_input, None, None)?))
                 }
                 LogicalPlan::Analyze(a) => {

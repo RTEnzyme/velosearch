@@ -1,6 +1,8 @@
 
 #![feature(portable_simd)]
 #![feature(stdsimd)]
+#![feature(is_sorted)]
+
 extern crate datafusion;
 
 pub mod utils;
