@@ -162,7 +162,7 @@ impl BooleanQuery {
         debug!("Finish physical plan");
         let timer = Instant::now();
         let res = collect(plan, task_ctx).await.map_err(|e| FastErr::DataFusionErr(e));
-        debug!("Result Collect took {} ms", timer.elapsed().as_millis());
+        debug!("Result Collect took {} us", timer.elapsed().as_micros());
         res
     }
 

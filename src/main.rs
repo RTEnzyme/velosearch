@@ -25,7 +25,11 @@ async fn main() -> Result<()> {
             Box::new(BooleanQueryHandler::new(&args.path.unwrap()))
         }
         Handler::PostingTable => {
-            Box::new(PostingHandler::new(&args.path.unwrap(), args.partition_num.expect("Should have partition_num arg")))
+            Box::new(PostingHandler::new(
+                &args.path.unwrap(),
+                args.partition_num.expect("Should have partition_num arg"),
+                args.batch_size.unwrap_or(512),
+            ))
         }
         Handler::Tantivy => {
             Box::new(TantivyHandler::new(&args.path.unwrap()).unwrap())

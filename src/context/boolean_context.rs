@@ -209,7 +209,7 @@ impl QueryPlanner for BooleanPlanner {
         let plan = planner
             .create_physical_plan(logical_plan, session_state)
             .await;
-        debug!("Physical Optimizer took {} ms", timer.elapsed().as_millis());
+        debug!("Physical Optimizer took {} us", timer.elapsed().as_micros());
         plan
     }
 }

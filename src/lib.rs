@@ -27,9 +27,11 @@ pub struct FastArgs {
     #[arg(value_enum)]
     pub handler: Handler,
 
-    #[arg(short, long)]
+    #[arg(long)]
     pub partition_num: Option<usize>,
 
+    #[arg(short, long)]
+    pub batch_size: Option<u32>,
 }
 
 #[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, ValueEnum, Debug)]

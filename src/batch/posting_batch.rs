@@ -177,6 +177,7 @@ pub struct PostingBatchBuilder {
     start: u32,
     current: u32,
     term_dict: RwLock<HashMap<String, Vec<u16>>>,
+    term_num: usize,
 }
 
 impl PostingBatchBuilder {
@@ -184,8 +185,13 @@ impl PostingBatchBuilder {
         Self { 
             start,
             current: start,
-            term_dict: RwLock::new(HashMap::new())
+            term_dict: RwLock::new(HashMap::new()),
+            term_num: 0,
         }
+    }
+
+    pub fn doc_len(&self) -> u32 {
+        self.current - self.start
     }
 
     pub fn push_term(&mut self, term: String, doc_id: u32) -> Result<()> {
@@ -196,6 +202,7 @@ impl PostingBatchBuilder {
             .or_insert(Vec::new())
             .push((doc_id - self.start) as u16);
         self.current = doc_id;
+        self.term_num += 1;
         Ok(())
     }
 
@@ -291,6 +298,7 @@ impl TermMetaBuilder {
     pub fn add_idx(&mut self, idx: (u16, u16)) {
         self.idx[idx.0 as usize] = Some(idx.1);
     }
+
 
     pub fn build(self) -> TermMeta {
         TermMeta {

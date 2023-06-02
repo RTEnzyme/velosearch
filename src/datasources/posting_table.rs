@@ -306,7 +306,6 @@ impl Stream for PostingStream {
         } else {
             None
         });
-        debug!("Finish poll next batch");
         poll
     }
 
