@@ -26,3 +26,4 @@ chrono = "0.4"
 parking_lot = "0.12"
 packed_simd_2 = "0.3.8"
 learned_term_idx = {path="learned_term_idx"}
+tantivy = "0.19"

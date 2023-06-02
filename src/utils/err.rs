@@ -1,5 +1,6 @@
 use datafusion::{arrow::error::ArrowError, error::DataFusionError};
 use failure::Fail;
+use tantivy::TantivyError;
 pub type Result<T> = std::result::Result<T, FastErr>;
 
 #[derive(Fail, Debug)]
@@ -18,7 +19,9 @@ pub enum FastErr {
     #[fail(display = "SerdeErr: {}", _0)]
     SerdeErr(serde_json::Error),
     #[fail(display = "InternalErr: {}", _0)]
-    InternalErr(String)
+    InternalErr(String),
+    #[fail(display = "TantivyErr: {}", _0)]
+    TantivyErr(#[cause] TantivyError)
 }
 
 impl From<serde_json::Error> for FastErr {
@@ -48,5 +51,11 @@ impl  From<ArrowError> for FastErr {
 impl From<DataFusionError> for FastErr {
     fn from(value: DataFusionError) -> Self {
         FastErr::DataFusionErr(value)
+    }
+}
+
+impl From<TantivyError> for FastErr {
+    fn from(value: TantivyError) -> Self {
+        FastErr::TantivyErr(value)
     }
 }

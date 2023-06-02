@@ -1,9 +1,10 @@
 use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
-use datafusion::{arrow::{datatypes::{Schema, Field, DataType}}, sql::TableReference};
+use datafusion::{arrow::{datatypes::{Schema, Field, DataType}}, sql::TableReference, prelude::col};
 use learned_term_idx::TermIdx;
 use rand::{thread_rng, seq::IteratorRandom};
+use tantivy::tokenizer::{TextAnalyzer, SimpleTokenizer, RemoveLongFilter, LowerCaser, Stemmer};
 use tokio::time::Instant;
 use tracing::{info, span, Level, debug};
 
@@ -26,18 +27,21 @@ impl PostingHandler {
         let mut ids: Vec<u32> = Vec::new();
         let mut words: Vec<String> = Vec::new();
         let mut cnt = 0;
-
+        let tokenizer = TextAnalyzer::from(SimpleTokenizer)
+            .filter(RemoveLongFilter::limit(40))
+            .filter(LowerCaser)
+            .filter(Stemmer::default());
+        
         items
         .into_iter()
         .for_each(|e| {
             let WikiItem {id: _, text: w, title: _} = e;
-            w.split([' ', ',', '.', ';', '-'])
-            .into_iter()
-            .filter(|w| w.len() > 2)
-            .for_each(|e| {
+
+            let mut stream = tokenizer.token_stream(w.as_str());
+            while let Some(token) = stream.next() {
                 ids.push(cnt);
-                words.push(e.to_uppercase().to_string());
-            });
+                words.push(token.text.clone());
+            }
             cnt += 1;
         });
 
@@ -77,10 +81,12 @@ impl HandlerT for PostingHandler {
             let keys = test_iter.by_ref().take(5).collect::<Vec<String>>();
             cnt += 1;
             let table = table.clone();
-            let predicate = BooleanPredicateBuilder::should(&[&keys[0], &keys[1]]).unwrap();
-            let predicate1 = BooleanPredicateBuilder::must(&[&keys[2], &keys[3], &keys[4]]).unwrap();
-            let predicate = predicate.with_must(predicate1).unwrap();
+            // let predicate = BooleanPredicateBuilder::should(&[&keys[0], &keys[1]]).unwrap();
+            // let predicate1 = BooleanPredicateBuilder::must(&[&keys[2], &keys[3], &keys[4]]).unwrap();
+            let predicate = BooleanPredicateBuilder::should(&["and", "the"]).unwrap();
+            // let predicate = predicate.with_must(predicate1).unwrap();
             let predicate = predicate.build();
+            let predicate = predicate.boolean_and(col("me"));
             let time = Instant::now();
             // handlers.push(tokio::spawn(async move {
                 debug!("start construct query");
@@ -98,13 +104,13 @@ impl HandlerT for PostingHandler {
         // for handle in handlers {
         //     handle.await.unwrap();
         // }
-        let query_time = time.elapsed().as_millis();
-        info!("Total time: {} ms", query_time / cnt);
+        let query_time = time.elapsed().as_micros();
+        info!("Total time: {} us", query_time / cnt);
         Ok(())
     }
 }
 
-const BATCH_SIZE: usize = 6801;
+const BATCH_SIZE: usize = 512;
 
 fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: usize) -> PostingTable {
     let _span = span!(Level::INFO, "PostingHanlder to_batch").entered();
@@ -135,11 +141,13 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
         .for_each(|(word, id)| {
             let entry = term_idx[current.0].term_map.entry(word.clone()).or_insert(TermMetaBuilder::new(num_512_partition));
             if id == thredhold as u32 {
-                if thredhold % (BATCH_SIZE * num_512_partition) == 0 {
+                debug!("id: {}", id);
+                if id % (BATCH_SIZE * num_512_partition) as u32 == 0 {
                     current.0 += 1;
                     current.1 = 0;
                     info!("Start build ({}, {}) batch, current thredhold: {}", current.0, current.1, thredhold);
-                } else if thredhold % BATCH_SIZE == 0{
+                } else if id % BATCH_SIZE as u32 == 0{
+                    info!("Thredhold: {}, current: {:?}", thredhold, current);
                     current.1 += 1;
                 }
                 thredhold += BATCH_SIZE;

@@ -1,6 +1,6 @@
 
 use clap::Parser;
-use fastfull_search::index::{BaseHandler, SplitHandler, SplitO1, SplitConstruct, BooleanQueryHandler, PostingHandler};
+use fastfull_search::index::{BaseHandler, SplitHandler, SplitO1, SplitConstruct, BooleanQueryHandler, PostingHandler, TantivyHandler};
 use fastfull_search::{Result, FastArgs, Handler};
 use fastfull_search::index::handler::HandlerT;
 use tracing::{info, Level};
@@ -26,6 +26,9 @@ async fn main() -> Result<()> {
         }
         Handler::PostingTable => {
             Box::new(PostingHandler::new(&args.path.unwrap(), args.partition_num.expect("Should have partition_num arg")))
+        }
+        Handler::Tantivy => {
+            Box::new(TantivyHandler::new(&args.path.unwrap()).unwrap())
         }
     };
     handler.execute().await?;

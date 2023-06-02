@@ -40,4 +40,5 @@ pub enum Handler {
    LoadData,
    BooleanQuery,
    PostingTable,
+   Tantivy,
 }
