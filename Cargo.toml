@@ -27,3 +27,25 @@ parking_lot = "0.12"
 packed_simd_2 = "0.3.8"
 learned_term_idx = {path="learned_term_idx"}
 tantivy = "0.19"
+criterion = {version = "0.5", features = ["html_reports"]}
+sorted-iter = "0.1.11"
+
+[[bench]]
+name = "arrow_bitwise_and"
+harness = false
+
+[[bench]]
+name = "hashset_intersection"
+harness = false
+
+[[bench]]
+name = "hashset_withoutbuild"
+harness = false
+
+[[bench]]
+name = "sorted_list_intersection"
+harness = false
+
+[[bench]]
+name = "bitmap_vs_sorted"
+harness = false

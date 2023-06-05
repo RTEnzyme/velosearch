@@ -92,9 +92,9 @@ impl HandlerT for PostingHandler {
             // handlers.push(tokio::spawn(async move {
                 debug!("start construct query");
                 ctx.boolean("__table__", predicate).await.unwrap()
-                    // .explain(false, true).unwrap()
-                    // .show().await.unwrap();
-                    .collect().await.unwrap();
+                    .explain(false, true).unwrap()
+                    .show().await.unwrap();
+                    // .collect().await.unwrap();
                 // table.boolean_predicate(predicate).unwrap()
                 //     .collect().await.unwrap();
                     // .explain(false, true).unwrap()
