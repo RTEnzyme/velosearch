@@ -1,51 +1,73 @@
 
 #![feature(stdsimd)]
-use std::{slice::Iter, arch::x86_64::{_mm512_mask_compress_epi16, _mm512_mask_compress_epi32, __m512i, _mm512_mask_compressstoreu_epi16}};
+use std::{slice::Iter, arch::x86_64::{__m512i, _mm512_mask_compressstoreu_epi16}};
 
+use rayon::{prelude::*, iter};
 use criterion::{Criterion, BenchmarkId, criterion_group, criterion_main};
 use rand::seq::IteratorRandom;
 use sorted_iter::*;
 use sorted_iter::assume::*;
-use datafusion::arrow::{array::{BooleanArray, UInt32Array, Array}, compute::{kernels::filter, and, FilterPredicate, FilterBuilder, IterationStrategy}, util::{bit_iterator::BitIndexIterator, bit_chunk_iterator::UnalignedBitChunk}};
+use datafusion::arrow::{array::{BooleanArray, Array}, compute::and};
 
 const NUM_LANES: usize = 32;
+const IDS: __m512i = from_u16x32([
+    0, 1, 2, 3, 4, 5, 6, 7, 8,
+    9, 10, 11, 12, 13, 14, 15, 16,
+    17, 18, 19, 20, 21, 22, 23, 24,
+    25, 26, 27, 28, 29, 30, 31, 
+]);
 
-unsafe fn bitset_to_array_aux(
-    bitset: u32,
-    output: *mut u16,
-) {
-    let mut output_end = output;
-    let mut ids = from_u16x32([
-        0, 1, 2, 3, 4, 5, 6, 7, 8,
-        9, 10, 11, 12, 13, 14, 15, 16,
-        17, 18, 19, 20, 21, 22, 23, 24,
-        25, 26, 27, 28, 29, 30, 31, 
-    ]);
-    _mm512_mask_compressstoreu_epi16(output_end as *mut u8, bitset, ids);
-}
-
-fn bitset_to_array(buffer: &[u8], size: usize) -> Vec<u16> {
-    let chunk = UnalignedBitChunk::new(buffer, 0, size);
+#[inline]
+fn bitwise_and(b1: &BooleanArray, b2: &BooleanArray) -> Vec<u16> {
+    let and_res = and(&b1, &b2).unwrap();
+    let size = and_res.len();
+    let (prefix, buffer, suffix) = unsafe { and_res.data().buffers()[0].align_to::<u32>() };
+    assert!(prefix.len() == 0, "Len of prefix should be 0");
+    assert!(suffix.len() == 0, "Len of suffix should be 0");
     let mut output: Vec<u16> = Vec::with_capacity(size);
-    chunk
-        .iter()
+    let mut output_end = output.as_mut_ptr();
+    buffer
+        .into_iter()
+        .filter(|v| **v != 0)
         .for_each(|v| {
-            let bitset_1 = v as u32;
             unsafe {
-                bitset_to_array_aux(bitset_1, output.as_mut_ptr())
-            }
-            let bitset_2 = (v >> 32) as u32;
-            unsafe {
-                bitset_to_array_aux(bitset_2, output.as_mut_ptr())
+                _mm512_mask_compressstoreu_epi16(output_end as *mut u8, *v, IDS);
+                output_end = output_end.offset(v.count_ones() as isize);
             }
         });
     output
 }
 
+fn _split_range(r: &[u32]) -> (&[u32], Option<&[u32]>) {
+    let len = r.len();
+    if len <= 1 { return (r, None); }
+
+    let midpoint = len / 2;
+
+    (&r[0..midpoint], Some(&r[midpoint..len]))
+}
+
 #[inline]
-fn bitwise_and(b1: &BooleanArray, b2: &BooleanArray) {
+fn _bitwise_and_parall2(b1: &BooleanArray, b2: &BooleanArray) {
     let and_res = and(&b1, &b2).unwrap();
-    bitset_to_array(&and_res.data().buffers()[0], b1.len());
+    let size = and_res.len();
+    let (prefix, buffer, suffix) = unsafe { and_res.data().buffers()[0].align_to::<u32>() };
+    assert!(prefix.len() == 0, "Len of prefix should be 0");
+    assert!(suffix.len() == 0, "Len of suffix should be 0");
+    let _res: Vec<u16> = iter::split(buffer, _split_range)
+        .map(|v| {
+            let mut output: Vec<u16> = Vec::with_capacity(size / 2 + 1);
+            let mut output_end = output.as_mut_ptr();
+            for i in v {
+                unsafe {
+                    _mm512_mask_compressstoreu_epi16(output_end as *mut u8, *i, IDS);
+                    output_end = output_end.offset(i.count_ones() as isize);
+                }
+            }
+            output
+        })
+        .flatten()
+        .collect();
 }
 
 #[inline]
@@ -56,7 +78,7 @@ fn sorted_list_intersection(a1: Iter<u32>, a2: Iter<u32>) {
 }
 
 fn bench_itersection(c: &mut Criterion) {
-    let num: usize = 1024;
+    let num: usize = 4096;
     let mut group = c.benchmark_group("bitmap_vs_sorted");
     let v: Vec<u32> = (0..num as u32).collect();
     let mut rng = rand::thread_rng();
@@ -78,6 +100,9 @@ fn bench_itersection(c: &mut Criterion) {
         let b2 = BooleanArray::from(b2);
         group.bench_with_input(BenchmarkId::new("Bitmap", format!("{:.2}", sel)), &(&b1, &b2),
             |b, p| b.iter(|| bitwise_and(p.0, p.1)));
+        
+        // group.bench_with_input(BenchmarkId::new("Bitmap_Parall", format!("{:.2}", sel)), &(&b1, &b2),
+        //     |b, p| b.iter(|| bitwise_and_parall2(p.0, p.1)));
     }
     group.finish();
 }
