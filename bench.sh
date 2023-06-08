@@ -1,0 +1,1 @@
+./target/release/fastfull-search --path ~/repo/docker/spark/share/AC -b 6144 --partition-num 1 posting-table
