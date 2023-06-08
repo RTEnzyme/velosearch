@@ -85,11 +85,14 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                     posting.term_metas_of(&project_terms, p)
                 })
                 .collect();
+            debug!("collect partition range");
             let partition_range: Vec<Arc<BooleanArray>> = (0..term_stats.len())
-                .into_par_iter()
+                // .into_par_iter()
+                .into_iter()
                 .map(|p| {
                     let mut range: Vec<ArrayRef> = Vec::new();
                     let mut length = None;
+                    debug!("Get length");
                     for term in &term_stats[p] {
                         if let Some(t) = term {
                             length = Some(t.distribution().len());
@@ -97,6 +100,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                         }
                     }
                     if let Some(length) = length {
+                        debug!("Collect Array");
                         for t in &term_stats[p] {
                             range.push(
                                 match t {
@@ -105,10 +109,12 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                                 }
                             )
                         }
+                        debug!("New a batch");
                         let batch = RecordBatch::try_new(
                             projected_schema.clone(),
                             range,
                         ).unwrap();
+                        debug!("Eval batch");
                         let eval = self.predicate.as_ref().unwrap().eval(batch).unwrap();
                         eval
                     } else {
@@ -116,6 +122,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                     }
                 })
                 .collect();
+            debug!("Collect term statistics");
             let term_stats: Vec<Vec<Option<TermMeta>>> = term_stats
                 .into_iter()
                 .zip(partition_range.iter())
@@ -138,6 +145,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                 .collect();
             self.min_range = Some(partition_range);
             self.partition_stats = Some(term_stats);
+            debug!("End Pre_visit PostingExec");
             Ok(RewriteRecursion::Continue)
         } else {
             Ok(RewriteRecursion::Continue)

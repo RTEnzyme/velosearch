@@ -214,7 +214,6 @@ impl PostingExec {
     /// Get TermMeta From &[&str]
     pub fn term_metas_of(&self, terms: &[&str], partition: usize) -> Vec<Option<TermMeta>> {
         let term_idx = self.term_idx[partition].clone();
-        debug!("terms: {:?}", terms);
         terms
             .into_iter()
             .map(|&t| {

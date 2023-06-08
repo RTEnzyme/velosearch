@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use rand::{thread_rng, seq::IteratorRandom};
 use tantivy::{schema::{Schema, TEXT, Field, IndexRecordOption}, Index, doc, tokenizer::{TextAnalyzer, SimpleTokenizer, RemoveLongFilter, LowerCaser, Stemmer}, query::{Query, TermQuery, BooleanQuery, PhraseQuery, Occur}, Term, collector::{Count, DocSetCollector}};
 use tracing::debug;
-use crate::utils::Result;
+use crate::utils::{Result, json::WikiItem};
 
 use crate::utils::json::parse_wiki_dir;
 
@@ -18,8 +18,12 @@ pub struct TantivyHandler {
 }
 
 impl TantivyHandler {
-    pub fn new(path: &str) -> Result<Self> {
-        let items = parse_wiki_dir(path).unwrap();
+    pub fn new(base: String, path: Vec<String>) -> Result<Self> {
+        let items: Vec<WikiItem> = path
+            .into_iter()
+            .map(|p| parse_wiki_dir(&(base.clone() + &p)).unwrap())
+            .flatten()
+            .collect();
         let doc_len = items.len();
 
         let mut schema_builder = Schema::builder();
@@ -31,7 +35,8 @@ impl TantivyHandler {
             .filter(Stemmer::default());
         let mut test_case = HashSet::new();
         
-        let index = Index::create_in_ram(schema.clone());
+        let mut index = Index::create_in_ram(schema.clone());
+        index.set_multithread_executor(1)?;
         let mut index_writer = index.writer(10_000_000)?;
         items
             .into_iter()

@@ -22,8 +22,12 @@ pub struct PostingHandler {
 }
 
 impl PostingHandler {
-    pub fn new(path: &str, partition_nums: usize, batch_size: u32) -> Self {
-        let items = parse_wiki_dir(path).unwrap();
+    pub fn new(base: String, path: Vec<String>, partition_nums: usize, batch_size: u32) -> Self {
+        let items: Vec<WikiItem> = path
+            .into_iter()
+            .map(|p| parse_wiki_dir(&(base.clone() + &p)).unwrap())
+            .flatten()
+            .collect();
         let doc_len = items.len();
         let mut ids: Vec<u32> = Vec::new();
         let mut words: Vec<String> = Vec::new();
@@ -88,13 +92,14 @@ impl HandlerT for PostingHandler {
             // let predicate = predicate.with_must(predicate1).unwrap();
             let predicate = predicate.build();
             let predicate = predicate.boolean_and(col("me"));
+            let index = ctx.boolean("__table__", predicate).await.unwrap();
             let time = Instant::now();
             // handlers.push(tokio::spawn(async move {
                 debug!("start construct query");
-                ctx.boolean("__table__", predicate).await.unwrap()
-                    .explain(false, true).unwrap()
-                    .show().await.unwrap();
-                    // .collect().await.unwrap();
+                    index
+                    // .explain(false, true).unwrap()
+                    // .show().await.unwrap();
+                    .collect().await.unwrap();
                 // table.boolean_predicate(predicate).unwrap()
                 //     .collect().await.unwrap();
                     // .explain(false, true).unwrap()

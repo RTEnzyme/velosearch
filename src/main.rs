@@ -13,26 +13,27 @@ async fn main() -> Result<()> {
 
     let mut handler: Box<dyn HandlerT> = match args.handler {
         Handler::Base => {
-            Box::new(BaseHandler::new(&args.path.unwrap()))
+            Box::new(BaseHandler::new(&args.path[0]))
         }
-        Handler::SplitBase => Box::new(SplitHandler::new(&args.path.unwrap())),
-        Handler::SplitO1 => Box::new(SplitO1::new(&args.path.unwrap())),
+        Handler::SplitBase => Box::new(SplitHandler::new(&args.path[0])),
+        Handler::SplitO1 => Box::new(SplitO1::new(&args.path[0])),
         Handler::LoadData =>  {
-            SplitConstruct::new(&args.path.unwrap()).split("").await?;
+            SplitConstruct::new(&args.path[0]).split("").await?;
             return Ok(())
         }
         Handler::BooleanQuery => {
-            Box::new(BooleanQueryHandler::new(&args.path.unwrap()))
+            Box::new(BooleanQueryHandler::new(&args.path[0]))
         }
         Handler::PostingTable => {
             Box::new(PostingHandler::new(
-                &args.path.unwrap(),
+                args.base,
+                args.path,
                 args.partition_num.expect("Should have partition_num arg"),
                 args.batch_size.unwrap_or(512),
             ))
         }
         Handler::Tantivy => {
-            Box::new(TantivyHandler::new(&args.path.unwrap()).unwrap())
+            Box::new(TantivyHandler::new(args.base, args.path).unwrap())
         }
     };
     handler.execute().await?;

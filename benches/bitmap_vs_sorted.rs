@@ -1,6 +1,6 @@
 
 #![feature(stdsimd)]
-use std::{slice::Iter, arch::x86_64::{__m512i, _mm512_mask_compressstoreu_epi16}};
+use std::{slice::Iter, arch::x86_64::{__m512i, _mm512_mask_compressstoreu_epi16, _mm512_mask_compressstoreu_epi32}};
 
 use rayon::{prelude::*, iter};
 use criterion::{Criterion, BenchmarkId, criterion_group, criterion_main};
@@ -9,29 +9,27 @@ use sorted_iter::*;
 use sorted_iter::assume::*;
 use datafusion::arrow::{array::{BooleanArray, Array}, compute::and};
 
-const NUM_LANES: usize = 32;
-const IDS: __m512i = from_u16x32([
+const NUM_LANES: usize = 16;
+const IDS: __m512i = from_u32x16([
     0, 1, 2, 3, 4, 5, 6, 7, 8,
-    9, 10, 11, 12, 13, 14, 15, 16,
-    17, 18, 19, 20, 21, 22, 23, 24,
-    25, 26, 27, 28, 29, 30, 31, 
+    9, 10, 11, 12, 13, 14, 15,
 ]);
 
 #[inline]
-fn bitwise_and(b1: &BooleanArray, b2: &BooleanArray) -> Vec<u16> {
+fn bitwise_and(b1: &BooleanArray, b2: &BooleanArray) -> Vec<u32> {
     let and_res = and(&b1, &b2).unwrap();
     let size = and_res.len();
-    let (prefix, buffer, suffix) = unsafe { and_res.data().buffers()[0].align_to::<u32>() };
+    let (prefix, buffer, suffix) = unsafe { and_res.data().buffers()[0].align_to::<u16>() };
     assert!(prefix.len() == 0, "Len of prefix should be 0");
     assert!(suffix.len() == 0, "Len of suffix should be 0");
-    let mut output: Vec<u16> = Vec::with_capacity(size);
+    let mut output: Vec<u32> = Vec::with_capacity(size);
     let mut output_end = output.as_mut_ptr();
     buffer
         .into_iter()
         .filter(|v| **v != 0)
         .for_each(|v| {
             unsafe {
-                _mm512_mask_compressstoreu_epi16(output_end as *mut u8, *v, IDS);
+                _mm512_mask_compressstoreu_epi32(output_end as *mut u8, *v, IDS);
                 output_end = output_end.offset(v.count_ones() as isize);
             }
         });
@@ -110,10 +108,10 @@ fn bench_itersection(c: &mut Criterion) {
 criterion_group!(benches, bench_itersection);
 criterion_main!(benches);
 
-const fn from_u16x32(vals: [u16; NUM_LANES]) -> __m512i {
+const fn from_u32x16(vals: [u32; NUM_LANES]) -> __m512i {
     union U8x64 {
         vector: __m512i,
-        vals: [u16; NUM_LANES],
+        vals: [u32; NUM_LANES],
     }
     unsafe { U8x64 { vals }.vector }
 }

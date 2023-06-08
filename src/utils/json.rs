@@ -2,7 +2,7 @@ use std::{path::Path, fs::{File, self}, io::{BufReader, BufRead}, collections::{
 
 use serde::{Deserialize, Serialize};
 use threadpool::ThreadPool;
-use tracing::info;
+use tracing::{info, debug};
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use crate::utils::Result;
 
@@ -80,6 +80,7 @@ pub fn to_hashmap_v2(ids: Vec<u32>, words: Vec<String>, length: u32, partition_n
 
 
 pub fn parse_wiki_dir(path: &str) -> Result<Vec<WikiItem>> {
+    debug!("Start to parse path: {:}", path);
     let n_workers = 8;
     if fs::metadata(path)?.is_file() {
         return parse_wiki_file(&Path::new(path))

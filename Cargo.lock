@@ -954,6 +954,7 @@ dependencies = [
  "rayon",
  "regex",
  "sha2",
+ "sorted-iter",
  "unicode-segmentation",
  "uuid",
 ]

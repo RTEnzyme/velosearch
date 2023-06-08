@@ -21,17 +21,19 @@ use clap::{Parser, ValueEnum};
 #[derive(Parser, Debug)]
 pub struct FastArgs {
     /// file path
-    #[arg(short, long)]
-    pub path: Option<String>,
+    pub path: Vec<String>,
 
-    #[arg(value_enum)]
+    #[arg(value_enum, short)]
     pub handler: Handler,
 
-    #[arg(long)]
+    #[arg(short, long)]
     pub partition_num: Option<usize>,
 
     #[arg(short, long)]
     pub batch_size: Option<u32>,
+
+    #[arg(long)]
+    pub base: String,
 }
 
 #[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, ValueEnum, Debug)]
