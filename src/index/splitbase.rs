@@ -110,7 +110,7 @@ impl HandlerT for SplitHandler {
         self.words.iter().take(num as usize).cloned().collect()
     }
  
-    async fn execute(&mut self) -> Result<()> {
+    async fn execute(&mut self) -> Result<u128> {
         let batches = self.to_recordbatch(DEFAULT_PARTITION)?;
         // declare a new context.
         let ctx = SessionContext::new();
@@ -141,7 +141,7 @@ impl HandlerT for SplitHandler {
         .explain(false, true)?.show().await?;
         let query_time = time.elapsed().as_millis();
         info!("query time: {}", query_time);
-        Ok(())
+        Ok(query_time)
     }
 }
 
@@ -188,7 +188,7 @@ impl HandlerT for SplitO1 {
         self.base.get_words(num)
     }
 
-    async fn execute(&mut self) ->Result<()> {
+    async fn execute(&mut self) ->Result<u128> {
         let batches = self.base.to_recordbatch(DEFAULT_PARTITION)?;
         let batches = self.recode(batches)?;
         // declare a new context.
@@ -238,7 +238,7 @@ impl HandlerT for SplitO1 {
         }
         let query_time = time.elapsed().as_micros() / 50;
         info!("o1 query time: {} micros seconds", query_time);
-        Ok(())    
+        Ok(query_time)    
     }
 }
 

@@ -94,7 +94,7 @@ impl HandlerT for BooleanQueryHandler {
         vec![]
     }
 
-    async fn execute(&mut self) -> Result<()> {
+    async fn execute(&mut self) -> Result<u128> {
 
         info!("start BaseHandler executing");
         let batch = self.to_recordbatch()?;
@@ -136,7 +136,7 @@ impl HandlerT for BooleanQueryHandler {
         }
         let query_time = time.elapsed().as_micros();
         info!("query time: {}", query_time/cnt);
-        Ok(())
+        Ok(query_time)
     }
 }
 

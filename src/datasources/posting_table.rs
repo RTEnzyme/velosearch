@@ -1,4 +1,4 @@
-use std::{any::Any, sync::Arc, task::Poll};
+use std::{any::Any, sync::Arc, task::Poll, mem::size_of_val};
 
 use async_trait::async_trait;
 use datafusion::{
@@ -46,6 +46,19 @@ impl PostingTable {
             .into_iter()
             .map(|v| self.stat_of(v, partition))
             .collect()
+    }
+
+    pub fn space_usage(&self) -> usize {
+        let mut space: usize = 0;
+        space += self.term_idx
+            .iter()
+            .map(|v| size_of_val(&v.term_map))
+            .sum::<usize>();
+        space += self.postings
+            .iter()
+            .map(|v| v.iter().map(|v| v.space_usage()).sum::<usize>())
+            .sum::<usize>();
+        space
     }
 }
 

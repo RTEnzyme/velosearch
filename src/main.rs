@@ -33,9 +33,10 @@ async fn main() -> Result<()> {
             ))
         }
         Handler::Tantivy => {
-            Box::new(TantivyHandler::new(args.base, args.path).unwrap())
+            Box::new(TantivyHandler::new(args.base, args.path, args.partition_num.unwrap() as usize).unwrap())
         }
     };
-    handler.execute().await?;
+    let res = handler.execute().await?;
+    println!("{:}", res);
     Ok(())
 }

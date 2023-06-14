@@ -1,0 +1,38 @@
+thread 'main' panicked at 'called `Result::unwrap()` on an `Err` value: DataFusionErr(Execution("InternalErr: project index 16119 out of bounds, max field 15045"))', src/index/posting_handler.rs:103:38
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+Traceback (most recent call last):
+  File "bench.py", line 15, in <module>
+    stdout=subprocess.PIPE)
+ValueError: invalid literal for int() with base 10: b''
+Traceback (most recent call last):
+  File "bench.py", line 3, in <module>
+    import tqdm
+ModuleNotFoundError: No module named 'tqdm'
+  0%|          | 0/10 [00:00<?, ?it/s] 10%|█         | 1/10 [00:17<02:39, 17.76s/it] 20%|██        | 2/10 [00:52<03:40, 27.62s/it]  0%|          | 0/10 [00:00<?, ?it/s]thread 'main' panicked at 'failed printing to stdout: Broken pipe (os error 32)', library/std/src/io/stdio.rs:1009:9
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+ 10%|█         | 1/10 [00:17<02:41, 17.89s/it] 20%|██        | 2/10 [00:52<03:43, 27.90s/it] 30%|███       | 3/10 [01:44<04:31, 38.78s/it] 40%|████      | 4/10 [02:55<05:09, 51.54s/it] 50%|█████     | 5/10 [04:24<05:25, 65.02s/it] 60%|██████    | 6/10 [06:11<05:16, 79.12s/it] 70%|███████   | 7/10 [08:21<04:47, 95.93s/it] 80%|████████  | 8/10 [10:49<03:45, 112.63s/it] 90%|█████████ | 9/10 [13:30<02:07, 127.64s/it]thread 'main' panicked at 'called `Result::unwrap()` on an `Err` value: DataFusionErr(Execution("InternalErr: project index 14593 out of bounds, max field 14162"))', src/index/posting_handler.rs:103:38
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+ 90%|█████████ | 9/10 [16:37<01:50, 110.81s/it]
+1929
+3532
+6353
+5868
+7403
+9034
+14803
+16650
+14410
+Traceback (most recent call last):
+  File "bench.py", line 16, in <module>
+    res = int(res.stdout)
+ValueError: invalid literal for int() with base 10: b''
+  0%|          | 0/8 [00:00<?, ?it/s] 12%|█▎        | 1/8 [00:50<05:54, 50.68s/it] 25%|██▌       | 2/8 [01:40<05:01, 50.22s/it] 38%|███▊      | 3/8 [02:31<04:12, 50.49s/it] 50%|█████     | 4/8 [03:21<03:21, 50.32s/it] 62%|██████▎   | 5/8 [04:11<02:30, 50.31s/it] 75%|███████▌  | 6/8 [05:01<01:40, 50.27s/it] 88%|████████▊ | 7/8 [05:52<00:50, 50.35s/it]100%|██████████| 8/8 [06:43<00:00, 50.52s/it]100%|██████████| 8/8 [06:43<00:00, 50.42s/it]
+14752
+13106
+12032
+14168
+13610
+13887
+14472
+12997
+[14752, 13106, 12032, 14168, 13610, 13887, 14472, 12997]

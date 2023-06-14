@@ -1,6 +1,6 @@
-use std::{sync::{Arc, RwLock}, ops::Index, collections::HashMap, cmp::max};
+use std::{sync::{Arc, RwLock}, ops::Index, collections::HashMap, cmp::max, mem::size_of_val};
 
-use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray}, record_batch::RecordBatch}, from_slice::FromSlice, common::TermMeta};
+use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array}, record_batch::RecordBatch}, from_slice::FromSlice, common::TermMeta};
 use learned_term_idx::TermIdx;
 use crate::utils::{Result, FastErr};
 
@@ -135,6 +135,16 @@ impl PostingBatch {
         }
         batches.insert(projected_schema.index_of("__id__").expect("Should have __id__ field"), Arc::new(UInt32Array::from_iter_values((self.range.start).. (self.range.start + 32 * self.range.nums32))));
         Ok(RecordBatch::try_new(projected_schema, batches)?)
+    }
+
+    pub fn space_usage(&self) -> usize {
+        let mut space = 0;
+        space += size_of_val(self.schema.as_ref());
+        space += self.postings
+            .iter()
+            .map(|v| size_of_val(v.data().buffers()[0].as_slice()))
+            .sum::<usize>();
+        space
     }
 
     pub fn schema(&self) -> TermSchemaRef {

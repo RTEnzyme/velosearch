@@ -12,7 +12,7 @@ use crate::{utils::{json::{WikiItem, parse_wiki_dir, to_hashmap_v2}, Result}};
 pub trait HandlerT {
    fn get_words(&self, num: u32) -> Vec<String>; 
 
-   async fn execute(&mut self) -> Result<()>;
+   async fn execute(&mut self) -> Result<u128>;
 }
 
 pub struct BaseHandler {
@@ -100,7 +100,7 @@ impl HandlerT for BaseHandler {
         vec![]
     }
 
-    async fn execute(&mut self) -> Result<()> {
+    async fn execute(&mut self) -> Result<u128> {
 
         info!("start BaseHandler executing");
         let batch = self.to_recordbatch()?;
@@ -145,7 +145,7 @@ impl HandlerT for BaseHandler {
         }
         let query_time = time.elapsed().as_micros();
         info!("query time: {}", query_time/cnt);
-        Ok(())
+        Ok(query_time)
     }
 }
 

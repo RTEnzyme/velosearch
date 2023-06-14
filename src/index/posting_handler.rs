@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, sync::Arc, mem::size_of_val};
 
 use async_trait::async_trait;
 use datafusion::{arrow::{datatypes::{Schema, Field, DataType}}, sql::TableReference, prelude::col};
@@ -70,11 +70,12 @@ impl HandlerT for PostingHandler {
         self.test_case.clone()
     }
 
-    async fn execute(&mut self) ->  Result<()> {
+    async fn execute(&mut self) ->  Result<u128> {
 
         let partition_nums = self.partition_nums;
         let posting_table = to_batch(self.ids.take().unwrap(), self.words.take().unwrap(), self.doc_len, partition_nums, self.batch_size);
         let ctx = BooleanContext::new();
+        let space = posting_table.space_usage();
         ctx.register_index(TableReference::Bare { table: "__table__".into() }, Arc::new(posting_table))?;
         let table = ctx.index("__table__").await?;
         let mut test_iter = self.test_case.clone().into_iter();
@@ -86,20 +87,22 @@ impl HandlerT for PostingHandler {
             let keys = test_iter.by_ref().take(5).collect::<Vec<String>>();
             cnt += 1;
             // let table = table.clone();
-            // let predicate = BooleanPredicateBuilder::should(&[&keys[0], &keys[1]]).unwrap();
-            // let predicate1 = BooleanPredicateBuilder::must(&[&keys[2], &keys[3], &keys[4]]).unwrap();
-            let predicate = BooleanPredicateBuilder::should(&["and", "the"]).unwrap();
-            // let predicate = predicate.with_must(predicate1).unwrap();
+            let predicate = BooleanPredicateBuilder::should(&[&keys[0], &keys[1]]).unwrap();
+            let predicate1 = BooleanPredicateBuilder::must(&[&keys[2], &keys[3], &keys[4]]).unwrap();
+            // let predicate = BooleanPredicateBuilder::should(&["and", "the"]).unwrap();
+            let predicate = predicate.with_must(predicate1).unwrap();
             let predicate = predicate.build();
-            let predicate = predicate.boolean_and(col("me"));
+            // let predicate = predicate.boolean_and(col("me"));
             let index = ctx.boolean("__table__", predicate).await.unwrap();
             let time = Instant::now();
             // handlers.push(tokio::spawn(async move {
                 debug!("start construct query");
-                    index
+            for _ in 0..1 {
+                    index.clone()
                     // .explain(false, true).unwrap()
                     // .show().await.unwrap();
                     .collect().await.unwrap();
+            }
                 // table.boolean_predicate(predicate).unwrap()
                 //     .collect().await.unwrap();
                     // .explain(false, true).unwrap()
@@ -111,8 +114,9 @@ impl HandlerT for PostingHandler {
         //     handle.await.unwrap();
         // }
         let query_time = time.elapsed().as_micros();
-        info!("Total time: {} us", query_time / cnt);
-        Ok(())
+        info!("Total time: {} us", query_time / 1);
+        info!("Total memory: {} MB", space / 1000_000);
+        Ok(space as u128)
     }
 }
 
