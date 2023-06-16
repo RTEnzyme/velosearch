@@ -36,3 +36,10 @@ ValueError: invalid literal for int() with base 10: b''
 14472
 12997
 [14752, 13106, 12032, 14168, 13610, 13887, 14472, 12997]
+  0%|          | 0/30 [00:00<?, ?it/s]thread 'main' panicked at 'called `Result::unwrap()` on an `Err` value: DataFusionErr(Execution("InternalErr: project index 10590 out of bounds, max field 8949"))', src/index/posting_handler.rs:104:38
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+  0%|          | 0/30 [01:37<?, ?it/s]
+Traceback (most recent call last):
+  File "bench_batchsize.py", line 16, in <module>
+    res = int(res.stdout)
+ValueError: invalid literal for int() with base 10: b''

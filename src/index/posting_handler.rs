@@ -84,24 +84,32 @@ impl HandlerT for PostingHandler {
         debug!("======================start!===========================");
         let mut cnt = 0;
         // for _ in 0..1 {
-            let keys = test_iter.by_ref().take(5).collect::<Vec<String>>();
+            let keys = test_iter.by_ref().take(100).collect::<Vec<String>>();
             cnt += 1;
             // let table = table.clone();
-            let predicate = BooleanPredicateBuilder::should(&[&keys[0], &keys[1]]).unwrap();
-            let predicate1 = BooleanPredicateBuilder::must(&[&keys[2], &keys[3], &keys[4]]).unwrap();
+            // let predicate = BooleanPredicateBuilder::should(&[&keys[0], &keys[1]]).unwrap();
+            // let predicate1 = BooleanPredicateBuilder::must(&[&keys[2], &keys[3], &keys[4]]).unwrap();
             // let predicate = BooleanPredicateBuilder::should(&["and", "the"]).unwrap();
-            let predicate = predicate.with_must(predicate1).unwrap();
-            let predicate = predicate.build();
+            // let predicate = predicate.with_must(predicate1).unwrap();
+            // let predicate = predicate.build();
             // let predicate = predicate.boolean_and(col("me"));
-            let index = ctx.boolean("__table__", predicate).await.unwrap();
-            let time = Instant::now();
+            let mut time_sum = 0;
             // handlers.push(tokio::spawn(async move {
                 debug!("start construct query");
-            for _ in 0..1 {
-                    index.clone()
+            for i in 0..20 {
+                let idx = i * 5;
+                let predicate = BooleanPredicateBuilder::should(&[&keys[idx], &keys[idx + 1]]).unwrap();
+                let predicate1 = BooleanPredicateBuilder::must(&[&keys[idx + 2], &keys[idx + 3], &keys[idx + 4]]).unwrap();
+                // let predicate = BooleanPredicateBuilder::should(&["and", "the"]).unwrap();
+                let predicate = predicate.with_must(predicate1).unwrap();
+                let predicate = predicate.build();
+                let index = ctx.boolean("__table__", predicate).await.unwrap();
+                let timer = Instant::now();
+                    index
                     // .explain(false, true).unwrap()
                     // .show().await.unwrap();
                     .collect().await.unwrap();
+                time_sum += timer.elapsed().as_micros();
             }
                 // table.boolean_predicate(predicate).unwrap()
                 //     .collect().await.unwrap();
@@ -113,10 +121,9 @@ impl HandlerT for PostingHandler {
         // for handle in handlers {
         //     handle.await.unwrap();
         // }
-        let query_time = time.elapsed().as_micros();
-        info!("Total time: {} us", query_time / 1);
-        info!("Total memory: {} MB", space / 1000_000);
-        Ok(space as u128)
+        // info!("Total time: {} us", query_time / 5);
+        // info!("Total memory: {} MB", space / 1000_000);
+        Ok(time_sum / 20 as u128)
     }
 }
 
