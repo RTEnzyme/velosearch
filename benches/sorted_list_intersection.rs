@@ -1,7 +1,7 @@
 use sorted_iter::*;
 use sorted_iter::assume::*;
 use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
-use rand::{seq::IteratorRandom, distributions::Uniform, Rng};
+use rand::seq::IteratorRandom;
 
 #[inline]
 fn sorted_list_intersection(c: &mut Criterion) {

@@ -5,6 +5,10 @@ version = 3
 [[package]]
 name = "adaptive_hybrid_trie"
 version = "0.1.0"
+dependencies = [
+ "congee",
+ "fst-rs",
+]
 
 [[package]]
 name = "addr2line"
@@ -666,6 +670,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "congee"
+version = "0.2.18"
+source = "git+https://github.com/RTEnzyme/art-rs.git#620e407a26e9a75cf46324f908adafa1dcdf8b38"
+dependencies = [
+ "crossbeam-epoch",
+]
+
+[[package]]
 name = "const-random"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1159,6 +1171,13 @@ checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
 dependencies = [
  "libc",
  "winapi",
+]
+
+[[package]]
+name = "fst-rs"
+version = "0.1.0"
+dependencies = [
+ "arrow",
 ]
 
 [[package]]
