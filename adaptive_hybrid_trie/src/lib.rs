@@ -1,14 +1,16 @@
 use std::collections::HashMap;
+pub mod ah_trie;
 
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+#[cfg(feature = "hash_idx")]
+pub type TermIdx<T> = HashTermIdx<T>;
+#[cfg(feature = "trie_idx")]
+pub type  TermIdx<T> = ah_trie::AHTrie<T>;
 
-pub struct TermIdx<T> {
+pub struct HashTermIdx<T> {
     pub term_map: HashMap<String, T>
 }
 
-impl<T> TermIdx<T> {
+impl<T> HashTermIdx<T> {
     pub fn new() -> Self {
         Self { term_map: HashMap::new() }
     }
@@ -26,9 +28,4 @@ impl<T> TermIdx<T> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
 }

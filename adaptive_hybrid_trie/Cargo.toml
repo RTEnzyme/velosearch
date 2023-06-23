@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+default = ["hash_idx"]
+hash_idx = []
+trie_idx = []
 
 [dependencies]
 congee = {git = "https://github.com/RTEnzyme/art-rs.git"}

@@ -7,6 +7,11 @@ edition = "2021"
 [workspace]
 members = ["adaptive_hybrid_trie"]
 
+[features]
+default = []
+hash_idx = ["adaptive_hybrid_trie/hash_idx"]
+trie_idx = ["adaptive_hybrid_trie/trie_idx"]
+
 [dependencies]
 datafusion = {path="../arrow-datafusion/datafusion/core", features=["simd"]}
 # datafusion = "22.0.0"
