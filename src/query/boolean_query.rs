@@ -213,7 +213,7 @@ pub mod tests {
     use datafusion::common::TermMeta;
     use datafusion::from_slice::FromSlice;
     use datafusion::prelude::col;
-    use learned_term_idx::TermIdx;
+    use adaptive_hybrid_trie::TermIdx;
     use tracing::{Level};
     use crate::batch::{BatchRange, PostingBatch};
     use crate::{utils::Result, BooleanContext, datasources::posting_table::PostingTable};

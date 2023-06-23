@@ -2,7 +2,7 @@ use std::{collections::HashSet, sync::Arc, mem::size_of_val};
 
 use async_trait::async_trait;
 use datafusion::{arrow::{datatypes::{Schema, Field, DataType}}, sql::TableReference, prelude::col};
-use learned_term_idx::TermIdx;
+use adaptive_hybrid_trie::TermIdx;
 use rand::{thread_rng, seq::IteratorRandom};
 use tantivy::tokenizer::{TextAnalyzer, SimpleTokenizer, RemoveLongFilter, LowerCaser, Stemmer};
 use tokio::time::Instant;
@@ -96,21 +96,27 @@ impl HandlerT for PostingHandler {
             let mut time_sum = 0;
             // handlers.push(tokio::spawn(async move {
                 debug!("start construct query");
-            for i in 0..20 {
+            let mut time_distri = Vec::new();
+            let round = 20;
+            for i in 0..round {
                 let idx = i * 5;
                 let predicate = BooleanPredicateBuilder::should(&[&keys[idx], &keys[idx + 1]]).unwrap();
                 let predicate1 = BooleanPredicateBuilder::must(&[&keys[idx + 2], &keys[idx + 3], &keys[idx + 4]]).unwrap();
                 // let predicate = BooleanPredicateBuilder::should(&["and", "the"]).unwrap();
                 let predicate = predicate.with_must(predicate1).unwrap();
                 let predicate = predicate.build();
+                info!("Predicate{:}: {:?}", i, predicate);
                 let index = ctx.boolean("__table__", predicate).await.unwrap();
                 let timer = Instant::now();
                     index
                     // .explain(false, true).unwrap()
                     // .show().await.unwrap();
                     .collect().await.unwrap();
-                time_sum += timer.elapsed().as_micros();
+                let time = timer.elapsed().as_micros();
+                time_distri.push(time);
+                time_sum += time;
             }
+            info!("Time distribution: {:?}", time_distri);
                 // table.boolean_predicate(predicate).unwrap()
                 //     .collect().await.unwrap();
                     // .explain(false, true).unwrap()
@@ -123,7 +129,7 @@ impl HandlerT for PostingHandler {
         // }
         // info!("Total time: {} us", query_time / 5);
         // info!("Total memory: {} MB", space / 1000_000);
-        Ok(time_sum / 20 as u128)
+        Ok(time_sum / round as u128)
     }
 }
 

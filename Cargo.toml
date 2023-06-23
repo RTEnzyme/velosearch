@@ -5,7 +5,7 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [workspace]
-members = ["learned_term_idx"]
+members = ["adaptive_hybrid_trie"]
 
 [dependencies]
 datafusion = {path="../arrow-datafusion/datafusion/core", features=["simd"]}
@@ -25,7 +25,7 @@ rayon = "1.7"
 chrono = "0.4"
 parking_lot = "0.12"
 packed_simd_2 = "0.3.8"
-learned_term_idx = {path="learned_term_idx"}
+adaptive_hybrid_trie = {path="adaptive_hybrid_trie"}
 tantivy = "0.19"
 criterion = {version = "0.5", features = ["html_reports"]}
 sorted-iter = "0.1.11"

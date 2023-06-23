@@ -7,7 +7,7 @@ use datafusion::{
     logical_expr::TableType, execution::context::SessionState, prelude::Expr, error::{Result, DataFusionError}, 
     physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream, metrics::{ExecutionPlanMetricsSet, BaselineMetrics, MetricsSet}}, common::TermMeta};
 use futures::Stream;
-use learned_term_idx::TermIdx;
+use adaptive_hybrid_trie::TermIdx;
 use tracing::debug;
 
 use crate::batch::{PostingBatch, BatchRange, PostingBatchBuilder};

@@ -1,5 +1,5 @@
 [package]
-name = "learned_term_idx"
+name = "adaptive_hybrid_trie"
 version = "0.1.0"
 edition = "2021"
 

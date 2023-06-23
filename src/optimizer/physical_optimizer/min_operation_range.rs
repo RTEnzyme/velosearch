@@ -190,7 +190,7 @@ mod tests {
     use std::{sync::Arc, collections::HashMap};
 
     use datafusion::{arrow::{datatypes::{SchemaRef, Field, Schema, DataType}, array::{UInt16Array, BooleanArray}}, from_slice::FromSlice, physical_plan::{boolean::BooleanExec, expressions::col, ExecutionPlan}, physical_expr::boolean_query, physical_optimizer::PhysicalOptimizerRule, config::ConfigOptions, common::TermMeta};
-    use learned_term_idx::TermIdx;
+    use adaptive_hybrid_trie::TermIdx;
     use tracing::{Level, debug};
 
     use crate::{datasources::posting_table::PostingExec, batch::{PostingBatch, BatchRange}, MinOperationRange};

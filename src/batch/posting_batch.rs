@@ -1,7 +1,7 @@
 use std::{sync::{Arc, RwLock}, ops::Index, collections::HashMap, cmp::max, mem::size_of_val};
 
 use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array}, record_batch::RecordBatch}, from_slice::FromSlice, common::TermMeta};
-use learned_term_idx::TermIdx;
+use adaptive_hybrid_trie::TermIdx;
 use crate::utils::{Result, FastErr};
 
 /// 
