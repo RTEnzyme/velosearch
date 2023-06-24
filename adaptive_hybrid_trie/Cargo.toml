@@ -10,5 +10,6 @@ hash_idx = []
 trie_idx = []
 
 [dependencies]
-congee = {git = "https://github.com/RTEnzyme/art-rs.git"}
-fst-rs = {path = "../../FST-rs"}
+fst-rs = { path = "../../FST-rs" }
+dashmap = "^5.4"
+art-tree = { path = "../../art-rs" }
