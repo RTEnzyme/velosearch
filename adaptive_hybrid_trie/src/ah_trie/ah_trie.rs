@@ -101,3 +101,37 @@ impl<T: Clone> AHTrie<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::AHTrie;
+
+    macro_rules! ahtrie_test {
+        ($KEYS:expr) => {
+            let keys = $KEYS;
+            let trie = AHTrie::new(keys.clone(), (0..keys.len()).collect::<Vec<usize>>(), 20);
+            for (i, key) in keys.into_iter().enumerate() {
+                assert_eq!(trie.get(&key), Some(i));
+            }
+            
+        };
+    }
+    
+    #[test]
+    fn ahtrie_simple_test() {
+        let keys = vec![
+            "f".to_string(), "far".to_string(), "fas".to_string(), "fast".to_string(), "fat".to_string(),
+            "s".to_string(), "top".to_string(), "toy".to_string(), "trie".to_string(), "trip".to_string(),
+            "try".to_string(),
+        ];
+        ahtrie_test!(keys);
+    }
+
+    #[test]
+    fn ahtrie_hard_test() {
+        let keys = vec![
+            "f".to_string(), "fastest".to_string(), "gta".to_string(), "hardest".to_string()
+        ];
+        ahtrie_test!(keys);
+    }
+}
