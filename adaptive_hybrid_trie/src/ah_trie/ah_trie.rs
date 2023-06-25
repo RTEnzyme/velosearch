@@ -1,8 +1,10 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dashmap::DashMap;
+use fst_rs::FST;
+use parking_lot::RwLock;
 
-use super::{AHTrieInner, CUT_OFF};
+use super::{AHTrieInner, CUT_OFF, ChildNode};
 
 
 struct AccessStatistics {
@@ -11,30 +13,30 @@ struct AccessStatistics {
     // last_epoch: usize,
 }
 
-enum Encoding {
-    Fst,
+pub enum Encoding {
+    Fst(usize),
     Art,
 }
 
-pub struct AHTrie<T> {
+pub struct AHTrie<T: Clone> {
     skip_length: usize,
     epoch: usize,
     sampling_stat: DashMap<String, AccessStatistics>,
 
     /// Inner Adaptive Hybrid Trie
-    inner: Box<AHTrieInner<T>>,
+    inner: RwLock<AHTrieInner<T>>,
 
     /// Run-time tracing
     skip_counter: AtomicUsize,
 }
 
-impl<T> AHTrie<T> {
+impl<T: Clone> AHTrie<T> {
     pub fn new(keys: Vec<String>, values: Vec<T>, skip_length: usize) -> Self {
         Self {
             skip_length,
             epoch: 0,
             sampling_stat: DashMap::new(),
-            inner: Box::new(AHTrieInner::new(keys, values, CUT_OFF)),
+            inner: RwLock::new(AHTrieInner::new(keys, values, CUT_OFF)),
             skip_counter: AtomicUsize::new(skip_length),
         }
     }
@@ -48,11 +50,11 @@ impl<T> AHTrie<T> {
         }
     }
 
-    pub fn get(&self, key: &str) -> Option<&T> {
+    pub fn get(&self, key: &str) -> Option<T> {
         if self.is_sample() {
             self.trace(key);
         }
-        self.inner.get(key)
+        self.inner.read().get(key).cloned()
     }
 
     fn trace(&self, key: &str) {
@@ -63,6 +65,39 @@ impl<T> AHTrie<T> {
     }
 
     fn convert_encoding(&self, key: &str, encoding: Encoding) {
-        
+        let cur_encoding = self.inner.read().encoding(&key);
+        match (cur_encoding, encoding) {
+            (Encoding::Art, Encoding::Fst(_)) => {
+                let inner_read_guard = self.inner.read();
+                let kvs = inner_read_guard.prefix_keys(&key[..CUT_OFF]);
+                let mut keys = Vec::new();
+                let mut values = Vec::new();
+                kvs.into_iter()
+                    .for_each(|(k, v)| {
+                        keys.push(k.as_bytes().clone());
+                        values.push(if let ChildNode::Offset(off) = v {*off} else {unreachable!()});
+                    });
+                let fst = FST::new_with_bytes(&keys, values);
+                // Must drop RwLockReadGuard before acquiring RwLockWriteGuard
+                drop(inner_read_guard);
+
+                let mut inner = self.inner.write();
+                for key in keys {
+                    inner.remove_bytes(&key);
+                }
+                inner.insert(&key[..CUT_OFF], ChildNode::Fst(fst));
+            }
+            (Encoding::Fst(matched_length), Encoding::Art) => {
+                let inner_read_guard = self.inner.read();
+                let fst = inner_read_guard.get_fst(&key[..matched_length]).unwrap().clone();
+                // Must drop RwLockReadGuard before acquiring RwLockWriteGuard
+                drop(inner_read_guard);
+
+                let mut inner_write_guard = self.inner.write();
+                inner_write_guard.remove(&key[..matched_length]);
+                inner_write_guard.insert(&key[..CUT_OFF], ChildNode::Fst(fst));
+            }
+            _ => {}
+        }
     }
 }
