@@ -9,6 +9,7 @@ dependencies = [
  "art-tree",
  "dashmap",
  "fst-rs",
+ "parking_lot",
 ]
 
 [[package]]
