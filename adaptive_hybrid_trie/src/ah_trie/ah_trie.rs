@@ -74,10 +74,12 @@ impl<T: Clone> AHTrie<T> {
                 let mut values = Vec::new();
                 kvs.into_iter()
                     .for_each(|(k, v)| {
-                        keys.push(k.as_bytes().clone());
+                        println!("FST k: {:?}", k.as_bytes());
+                        keys.push(k.as_bytes()[CUT_OFF..].to_vec());
                         values.push(if let ChildNode::Offset(off) = v {*off} else {unreachable!()});
                     });
                 let fst = FST::new_with_bytes(&keys, values);
+                // Safety
                 // Must drop RwLockReadGuard before acquiring RwLockWriteGuard
                 drop(inner_read_guard);
 
@@ -90,12 +92,17 @@ impl<T: Clone> AHTrie<T> {
             (Encoding::Fst(matched_length), Encoding::Art) => {
                 let inner_read_guard = self.inner.read();
                 let fst = inner_read_guard.get_fst(&key[..matched_length]).unwrap().clone();
+                // Safety:
                 // Must drop RwLockReadGuard before acquiring RwLockWriteGuard
                 drop(inner_read_guard);
 
                 let mut inner_write_guard = self.inner.write();
                 inner_write_guard.remove(&key[..matched_length]);
-                inner_write_guard.insert(&key[..CUT_OFF], ChildNode::Fst(fst));
+                fst.iter()
+                    .for_each(|(k, v)| {
+                        println!("insert k: {:?}", k);
+                        inner_write_guard.insert_bytes(&[key[..matched_length].as_bytes(), &k].concat(), ChildNode::Offset(v as usize));
+                    })
             }
             _ => {}
         }
@@ -104,14 +111,16 @@ impl<T: Clone> AHTrie<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::AHTrie;
+    use crate::ah_trie::ChildNode;
+
+    use super::{AHTrie, Encoding};
 
     macro_rules! ahtrie_test {
         ($KEYS:expr) => {
             let keys = $KEYS;
             let trie = AHTrie::new(keys.clone(), (0..keys.len()).collect::<Vec<usize>>(), 20);
             for (i, key) in keys.into_iter().enumerate() {
-                assert_eq!(trie.get(&key), Some(i));
+                assert_eq!(trie.get(&key), Some(i), "key: {:?}", key);
             }
             
         };
@@ -130,8 +139,44 @@ mod tests {
     #[test]
     fn ahtrie_hard_test() {
         let keys = vec![
-            "f".to_string(), "fastest".to_string(), "gta".to_string(), "hardest".to_string()
+            "f".to_string(), "fastest".to_string(), "gta".to_string(), "hardest".to_string(),
         ];
         ahtrie_test!(keys);
+    }
+
+    #[test]
+    fn ahtrie_convert_fst_to_art() {
+        let keys = vec![
+            "fast123".to_string(), "fast124".to_string(), "fast125".to_string(), "fast1255".to_string(),
+        ];
+        let trie = AHTrie::new(keys.clone(), (0..keys.len()).collect::<Vec<usize>>(), 20);
+        trie.convert_encoding("fast", Encoding::Art);
+        
+        // Should get the value correctly
+        for (i, k) in keys.iter().enumerate() {
+            assert_eq!(trie.get(k.as_str()), Some(i));
+        }
+    }
+
+    #[test]
+    fn ahtrie_convert_art_to_fst() {
+        let keys = vec![
+            "fast123".to_string(), "fast124".to_string(), "fast125".to_string(), "last1255".to_string(),
+        ];
+        let trie = AHTrie::new(keys.clone(), (0..keys.len()).collect::<Vec<usize>>(), 20);
+        // Convert fst to art
+        trie.convert_encoding("fast125", Encoding::Art);
+        // Should get the value correctly
+        for (i, k) in keys.iter().enumerate() {
+            assert_eq!(trie.get(k.as_str()), Some(i));
+        }
+
+        // And then, convert art to fst
+        trie.convert_encoding("fast125", Encoding::Fst(0));
+
+        // Should get the value correctly
+        for (i, k) in keys.iter().enumerate() {
+            assert_eq!(trie.get(k.as_str()), Some(i));
+        }
     }
 }

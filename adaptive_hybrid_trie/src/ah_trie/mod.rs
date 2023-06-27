@@ -3,7 +3,6 @@ use std::cmp::min;
 
 use art_tree::{Art, ByteString};
 use fst_rs::FST;
-use parking_lot::RwLock;
 
 use self::ah_trie::Encoding;
 
@@ -59,7 +58,12 @@ impl<T> AHTrieInner<T> {
     }
 
     pub fn get(&self, key: &str) -> Option<&T> {
-        let key_bytes = prefix(key);
+        let pre = prefix(key);
+        let key_bytes = if key.len() <= CUT_OFF {
+            &pre
+        } else {
+            key.as_bytes()
+        };
         match self.root.get_with_length(&ByteString::new(&key_bytes)) {
             Some((child, length)) => {
                 match child {
@@ -74,7 +78,12 @@ impl<T> AHTrieInner<T> {
     }
 
     pub fn get_fst(&self, key: &str) -> Option<&FST> {
-        let key_bytes = prefix(key);
+        let pre = prefix(key);
+        let key_bytes = if key.len() <= CUT_OFF {
+            &pre
+        } else {
+            key.as_bytes()
+        };
         match self.root.get(&ByteString::new(&key_bytes)) {
             Some(child) => match child {
                 ChildNode::Fst(fst) => Some(fst),
@@ -86,6 +95,10 @@ impl<T> AHTrieInner<T> {
 
     pub fn insert(&mut self, key: &str, value: ChildNode) {
         self.root.insert(ByteString::new(key.as_bytes()), value);
+    }
+
+    pub fn insert_bytes(&mut self, key: &[u8], value: ChildNode) {
+        self.root.insert(ByteString::new(key), value);
     }
 
     pub fn remove(&mut self, key: &str) {
