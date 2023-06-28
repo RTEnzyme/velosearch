@@ -13,4 +13,4 @@ trie_idx = []
 fst-rs = { path = "../../FST-rs" }
 dashmap = "^5.4"
 art-tree = { path = "../../art-rs" }
-parking_lot = "^0.12"
+tokio = { version = "1", features = ["rt", "net", "sync", "macros"] }
