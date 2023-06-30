@@ -18,7 +18,7 @@ pub enum Encoding {
     Art,
 }
 
-pub struct AHTrie<T: Clone> {
+pub struct AHTrie<T: Clone+Send+Sync> {
     /// A tokio runtime for executing synchronous operation
     rt: Runtime,
     skip_length: usize,
@@ -32,13 +32,13 @@ pub struct AHTrie<T: Clone> {
     skip_counter: AtomicUsize,
 }
 
-impl<T: Clone> AHTrie<T> {
+impl<T: Clone+Send+Sync> AHTrie<T> {
     pub fn new(keys: Vec<String>, values: Vec<T>, skip_length: usize) -> Self {
         Self::new_with_rt(
             keys,
             values,
             skip_length,
-            tokio::runtime::Builder::new_current_thread().build().unwrap(),
+            tokio::runtime::Builder::new_multi_thread().build().unwrap(),
         )
     }
 
@@ -62,11 +62,21 @@ impl<T: Clone> AHTrie<T> {
         }
     }
 
-    pub async fn get(&self, key: &str) -> Option<T> {
+    pub fn get(&self, key: &str) -> Option<T> {
         if self.is_sample() {
             self.trace(key);
         }
-        self.inner.read().await.get(key).cloned()
+        self.inner.blocking_read().get(key).cloned()
+    }
+
+    pub fn get_mut<F>(&self, key: &str, f: F)
+    where F: Fn(&mut T),
+    {
+        let mut block = self.inner.blocking_write();
+        match block.get_offset(key) {
+            Some(v) => f(block.get_mut(v)),
+            None => unreachable!(),
+        }
     }
 
     #[inline]
@@ -136,13 +146,13 @@ mod tests {
             let keys = $KEYS;
             let trie = AHTrie::new(keys.clone(), (0..keys.len()).collect::<Vec<usize>>(), 20);
             for (i, key) in keys.into_iter().enumerate() {
-                assert_eq!(trie.get(&key).await, Some(i), "key: {:?}", key);
+                assert_eq!(trie.get(&key), Some(i), "key: {:?}", key);
             }
             std::mem::forget(trie);
         };
     }
     
-    #[tokio::test]
+    #[tokio::test(flavor ="multi_thread")]
     async fn ahtrie_simple_test() {
         let keys = vec![
             "f".to_string(), "far".to_string(), "fas".to_string(), "fast".to_string(), "fat".to_string(),
@@ -152,7 +162,20 @@ mod tests {
         ahtrie_test!(keys);
     }
 
-    #[tokio::test]
+    #[test]
+    fn ahtrie_raw_test() {
+        let keys = vec![
+            "f".to_string(), "far".to_string(), "fas".to_string(), "fast".to_string(), "fat".to_string(),
+            "s".to_string(), "top".to_string(), "toy".to_string(), "trie".to_string(), "trip".to_string(),
+            "try".to_string(),
+        ];
+        let trie = AHTrie::new(keys.clone(), (0..keys.len()).collect::<Vec<usize>>(), 20);
+        for (i, key) in keys.into_iter().enumerate() {
+            assert_eq!(trie.get(&key), Some(i), "key: {:?}", key);
+        }
+    }
+
+    #[tokio::test(flavor ="multi_thread")]
     async fn ahtrie_hard_test() {
         let keys = vec![
             "f".to_string(), "fastest".to_string(), "gta".to_string(), "hardest".to_string(),
@@ -160,7 +183,7 @@ mod tests {
         ahtrie_test!(keys);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor ="multi_thread")]
     async fn ahtrie_convert_fst_to_art() {
         let keys = vec![
             "fast123".to_string(), "fast124".to_string(), "fast125".to_string(), "fast1255".to_string(),
@@ -170,12 +193,12 @@ mod tests {
         
         // Should get the value correctly
         for (i, k) in keys.iter().enumerate() {
-            assert_eq!(trie.get(k.as_str()).await, Some(i));
+            assert_eq!(trie.get(k.as_str()), Some(i));
         }
         std::mem::forget(trie);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor ="multi_thread")]
     async fn ahtrie_convert_art_to_fst() {
         let keys = vec![
             "fast123".to_string(), "fast124".to_string(), "fast125".to_string(), "last1255".to_string(),
@@ -185,7 +208,7 @@ mod tests {
         trie.convert_encoding("fast125", Encoding::Art).await;
         // Should get the value correctly
         for (i, k) in keys.iter().enumerate() {
-            assert_eq!(trie.get(k.as_str()).await, Some(i));
+            assert_eq!(trie.get(k.as_str()), Some(i));
         }
 
         // And then, convert art to fst
@@ -193,7 +216,7 @@ mod tests {
 
         // Should get the value correctly
         for (i, k) in keys.iter().enumerate() {
-            assert_eq!(trie.get(k.as_str()).await, Some(i));
+            assert_eq!(trie.get(k.as_str()), Some(i));
         }
         std::mem::forget(trie);
     }

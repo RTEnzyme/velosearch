@@ -5,6 +5,7 @@ use art_tree::{Art, ByteString};
 use fst_rs::FST;
 
 use self::ah_trie::Encoding;
+pub use ah_trie::AHTrie;
 
 const CUT_OFF: usize = 4;
 pub enum ChildNode {
@@ -55,6 +56,30 @@ impl<T> AHTrieInner<T> {
             root: art,
             values: values,
         }
+    }
+
+    pub fn get_offset(&self, key: &str) -> Option<usize> {
+        let pre = prefix(key);
+        let key_bytes = if key.len() <= CUT_OFF {
+            &pre
+        } else {
+            key.as_bytes()
+        };
+        match self.root.get_with_length(&ByteString::new(&key_bytes)) {
+            Some((child, length)) => {
+                match child {
+                    ChildNode::Fst(fst) => fst
+                        .get(&key.as_bytes()[length..])
+                        .map(|v| v as usize),
+                    ChildNode::Offset(off) => Some(*off),
+                }
+            }
+            None => None
+        } 
+    }
+
+    pub fn get_mut(&mut self, offset: usize) -> &mut T {
+        &mut self.values[offset]
     }
 
     pub fn get(&self, key: &str) -> Option<&T> {

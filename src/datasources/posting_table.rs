@@ -38,7 +38,7 @@ impl PostingTable {
 
     #[inline]
     pub fn stat_of(&self, term_name: &str, partition: usize) -> Option<TermMeta> {
-        self.term_idx[partition].get(term_name).cloned()
+        self.term_idx[partition].get(term_name)
     }
 
     pub fn stats_of(&self, term_names: &[&str], partition: usize) -> Vec<Option<TermMeta>> {
@@ -52,7 +52,7 @@ impl PostingTable {
         let mut space: usize = 0;
         space += self.term_idx
             .iter()
-            .map(|v| size_of_val(&v.term_map))
+            .map(|v| size_of_val(&v))
             .sum::<usize>();
         space += self.postings
             .iter()
@@ -230,7 +230,7 @@ impl PostingExec {
         terms
             .into_iter()
             .map(|&t| {
-                term_idx.get(t).cloned()
+                term_idx.get(t)
             })
             .collect()
     }
@@ -373,7 +373,7 @@ mod tests {
             range.clone()
         ).expect("Can't try new a PostingBatch");
 
-        let term_idx: Vec<Arc<TermIdx<TermMeta>>> = vec![Arc::new(TermIdx::new())];
+        let term_idx: Vec<Arc<TermIdx<TermMeta>>> = vec![];
         let provider = PostingTable::new(
                 schema.clone(),
                 term_idx,
@@ -454,7 +454,7 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let input = Arc::new(PostingExec::try_new(
             vec![Arc::new(vec![batch])], 
-            vec![Arc::new(TermIdx::new())], 
+            vec![], 
             schema.clone(), 
             Some(vec![1, 2, 4]),
             None,

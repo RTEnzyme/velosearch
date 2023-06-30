@@ -3,7 +3,7 @@ pub mod ah_trie;
 
 #[cfg(feature = "hash_idx")]
 pub type TermIdx<T> = HashTermIdx<T>;
-#[cfg(feature = "trie_idx")]
+#[cfg(all(feature = "trie_idx", not(feature = "hash_idx")))]
 pub type  TermIdx<T> = ah_trie::AHTrie<T>;
 
 pub struct HashTermIdx<T> {

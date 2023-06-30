@@ -8,7 +8,7 @@ edition = "2021"
 members = ["adaptive_hybrid_trie"]
 
 [features]
-default = []
+default = ["trie_idx"]
 hash_idx = ["adaptive_hybrid_trie/hash_idx"]
 trie_idx = ["adaptive_hybrid_trie/trie_idx"]
 

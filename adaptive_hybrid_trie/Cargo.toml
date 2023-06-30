@@ -5,7 +5,7 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [features]
-default = ["hash_idx"]
+default = ["trie_idx"]
 hash_idx = []
 trie_idx = []
 
@@ -13,4 +13,4 @@ trie_idx = []
 fst-rs = { path = "../../FST-rs" }
 dashmap = "^5.4"
 art-tree = { path = "../../art-rs" }
-tokio = { version = "1", features = ["rt", "net", "sync", "macros"] }
+tokio = { version = "1", features = ["rt", "net", "sync", "macros", "rt-multi-thread"] }
