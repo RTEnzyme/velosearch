@@ -1,4 +1,4 @@
-use std::{collections::{HashSet, HashMap}, sync::Arc, mem::size_of_val};
+use std::{collections::{HashSet, HashMap, BTreeMap}, sync::Arc, mem::size_of_val};
 
 use async_trait::async_trait;
 use datafusion::{arrow::{datatypes::{Schema, Field, DataType}}, sql::TableReference, prelude::col};
@@ -14,11 +14,10 @@ use super::HandlerT;
 
 pub struct PostingHandler {
     doc_len: usize,
-    ids: Option<Vec<u32>>,
-    words: Option<Vec<String>>,
     test_case: Vec<String>,
     partition_nums: usize,
     batch_size: u32,
+    posting_table: Option<PostingTable>,
 }
 
 impl PostingHandler {
@@ -59,7 +58,13 @@ impl PostingHandler {
             .map(|e| e.to_string())
             .collect();
         info!("self.doc_len = {}", doc_len);
-        Self { doc_len, ids: Some(ids), words: Some(words), test_case, partition_nums, batch_size }
+        Self { 
+            doc_len,
+            test_case,
+            partition_nums,
+            batch_size,
+            posting_table: Some(to_batch(ids, words, doc_len, partition_nums, batch_size)),
+        }
     }
 
 }
@@ -73,10 +78,9 @@ impl HandlerT for PostingHandler {
     async fn execute(&mut self) ->  Result<u128> {
 
         let partition_nums = self.partition_nums;
-        let posting_table = to_batch(self.ids.take().unwrap(), self.words.take().unwrap(), self.doc_len, partition_nums, self.batch_size);
         let ctx = BooleanContext::new();
-        let space = posting_table.space_usage();
-        ctx.register_index(TableReference::Bare { table: "__table__".into() }, Arc::new(posting_table))?;
+        let space = self.posting_table.as_ref().unwrap().space_usage();
+        ctx.register_index(TableReference::Bare { table: "__table__".into() }, Arc::new(self.posting_table.take().unwrap()))?;
         let table = ctx.index("__table__").await?;
         let mut test_iter = self.test_case.clone().into_iter();
 
@@ -97,7 +101,7 @@ impl HandlerT for PostingHandler {
             // handlers.push(tokio::spawn(async move {
                 debug!("start construct query");
             let mut time_distri = Vec::new();
-            let round = 20;
+            let round = 5;
             for i in 0..round {
                 let idx = i * 5;
                 let predicate = BooleanPredicateBuilder::should(&[&keys[idx], &keys[idx + 1]]).unwrap();
@@ -145,14 +149,14 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
     info!("The lenght of schema: {}", schema.fields().len());
     info!("num_512: {}, num_512_partition: {}", num_512, num_512_partition);
     let mut partition_batch = Vec::new();
-    let mut term_idx: Vec<HashMap<String, TermMetaBuilder>> = Vec::new();
+    let mut term_idx: Vec<BTreeMap<String, TermMetaBuilder>> = Vec::new();
     for i in 0..partition_nums {
         let mut batches = Vec::new();
         for j in 0..num_512_partition {
             batches.push(PostingBatchBuilder::new((i as u32 * batch_size * num_512_partition + j as u32 * batch_size) as u32));
         }
         partition_batch.push(batches);
-        term_idx.push(HashMap::new());
+        term_idx.push(BTreeMap::new());
     }
     let mut current = (0, 0);
     let mut thredhold = batch_size;
@@ -198,7 +202,7 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
         .map(|m| {
             let mut keys = Vec::new();
             let mut values = Vec::new();
-            let map = m
+            m
                 .into_iter()
                 .for_each(|(k, v)| {
                     keys.push(k); 

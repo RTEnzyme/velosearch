@@ -2,7 +2,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dashmap::DashMap;
 use fst_rs::FST;
-use tokio::{runtime::Runtime, sync::RwLock};
+use tokio::{runtime::{Runtime, Handle}, sync::RwLock};
+use std::sync::Arc;
+use tracing::debug;
 
 use super::{AHTrieInner, CUT_OFF, ChildNode};
 
@@ -20,13 +22,13 @@ pub enum Encoding {
 
 pub struct AHTrie<T: Clone+Send+Sync> {
     /// A tokio runtime for executing synchronous operation
-    rt: Runtime,
+    // rt: Runtime,
     skip_length: usize,
     epoch: usize,
     sampling_stat: DashMap<String, AccessStatistics>,
 
     /// Inner Adaptive Hybrid Trie
-    inner: RwLock<AHTrieInner<T>>,
+    inner: Arc<RwLock<AHTrieInner<T>>>,
 
     /// Run-time tracing
     skip_counter: AtomicUsize,
@@ -38,17 +40,17 @@ impl<T: Clone+Send+Sync> AHTrie<T> {
             keys,
             values,
             skip_length,
-            tokio::runtime::Builder::new_multi_thread().build().unwrap(),
+            // tokio::runtime::Builder::new_multi_thread().build().unwrap(),
         )
     }
 
-    pub fn new_with_rt(keys: Vec<String>, values: Vec<T>, skip_length: usize, rt: Runtime) -> Self {
+    pub fn new_with_rt(keys: Vec<String>, values: Vec<T>, skip_length: usize) -> Self {
         Self {
-            rt,
+            // rt,
             skip_length,
             epoch: 0,
             sampling_stat: DashMap::new(),
-            inner: RwLock::new(AHTrieInner::new(keys, values, CUT_OFF)),
+            inner: Arc::new(RwLock::new(AHTrieInner::new(keys, values, CUT_OFF))),
             skip_counter: AtomicUsize::new(skip_length),
         }
     }
@@ -66,7 +68,10 @@ impl<T: Clone+Send+Sync> AHTrie<T> {
         if self.is_sample() {
             self.trace(key);
         }
-        self.inner.blocking_read().get(key).cloned()
+        debug!("get key: {:}", key);
+        futures::executor::block_on(async {
+            self.inner.as_ref().read().await.get(key).cloned()
+        })
     }
 
     pub fn get_mut<F>(&self, key: &str, f: F)
@@ -81,14 +86,15 @@ impl<T: Clone+Send+Sync> AHTrie<T> {
 
     #[inline]
     fn trace(&self, key: &str) {
-        // To avoid blocking the main thread,
+        debug!("start tracing");
         // use runtime to trace the statistics asynchronously.
-        self.rt.block_on(async {
+        futures::executor::block_on(async {
             self.sampling_stat
                 .entry(key.to_string())
                 .and_modify(|v| v.reads += 1)
                 .or_insert(AccessStatistics { reads: 0 });
         });
+        debug!("end tracing");
     }
 
     async fn convert_encoding(&self, key: &str, encoding: Encoding) {

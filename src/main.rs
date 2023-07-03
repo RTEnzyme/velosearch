@@ -5,9 +5,8 @@ use fastfull_search::{Result, FastArgs, Handler};
 use fastfull_search::index::handler::HandlerT;
 use tracing::{info, Level};
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt().with_max_level(Level::INFO).init();
+fn main() -> Result<()> {
+    tracing_subscriber::fmt().with_max_level(Level::DEBUG).init();
     info!("main execution");
     let args = FastArgs::parse();
 
@@ -18,7 +17,7 @@ async fn main() -> Result<()> {
         Handler::SplitBase => Box::new(SplitHandler::new(&args.path[0])),
         Handler::SplitO1 => Box::new(SplitO1::new(&args.path[0])),
         Handler::LoadData =>  {
-            SplitConstruct::new(&args.path[0]).split("").await?;
+            // SplitConstruct::new(&args.path[0]).split("").await?;
             return Ok(())
         }
         Handler::BooleanQuery => {
@@ -36,7 +35,9 @@ async fn main() -> Result<()> {
             Box::new(TantivyHandler::new(args.base, args.path, args.partition_num.unwrap() as usize).unwrap())
         }
     };
-    let res = handler.execute().await?;
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+    
+    let res = runtime.block_on(async {handler.execute().await.unwrap() });
     println!("{:}", res);
     Ok(())
 }

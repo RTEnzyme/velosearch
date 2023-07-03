@@ -1,4 +1,4 @@
-use std::{sync::{Arc, RwLock}, ops::Index, collections::HashMap, cmp::max, mem::size_of_val};
+use std::{sync::{Arc, RwLock}, ops::Index, collections::{HashMap, BTreeMap}, cmp::max, mem::size_of_val};
 
 use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array}, record_batch::RecordBatch}, from_slice::FromSlice, common::TermMeta};
 use adaptive_hybrid_trie::TermIdx;
@@ -258,7 +258,7 @@ impl PostingBatchBuilder {
             Arc::new(BatchRange::new(self.start, self.current + 1)))
     }
 
-    pub fn build_with_idx(self, idx: &mut HashMap<String, TermMetaBuilder>, batch_idx: u16) -> Result<PostingBatch> {
+    pub fn build_with_idx(self, idx: &mut BTreeMap<String, TermMetaBuilder>, batch_idx: u16) -> Result<PostingBatch> {
         let term_dict = self.term_dict
             .into_inner()
             .expect("Can't acquire the RwLock correctly");

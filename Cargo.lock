@@ -9,7 +9,9 @@ dependencies = [
  "art-tree",
  "dashmap",
  "fst-rs",
+ "futures",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1176,6 +1178,7 @@ name = "fst-rs"
 version = "0.1.0"
 dependencies = [
  "arrow",
+ "tracing",
 ]
 
 [[package]]
