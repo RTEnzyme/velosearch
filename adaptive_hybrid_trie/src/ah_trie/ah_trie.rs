@@ -25,7 +25,7 @@ pub struct AHTrie<T: Clone+Send+Sync> {
     // rt: Runtime,
     skip_length: usize,
     epoch: usize,
-    sampling_stat: DashMap<String, AccessStatistics>,
+    sampling_stat: Arc<DashMap<String, AccessStatistics>>,
 
     /// Inner Adaptive Hybrid Trie
     inner: Arc<RwLock<AHTrieInner<T>>>,
@@ -49,7 +49,7 @@ impl<T: Clone+Send+Sync> AHTrie<T> {
             // rt,
             skip_length,
             epoch: 0,
-            sampling_stat: DashMap::new(),
+            sampling_stat: Arc::new(DashMap::new()),
             inner: Arc::new(RwLock::new(AHTrieInner::new(keys, values, CUT_OFF))),
             skip_counter: AtomicUsize::new(skip_length),
         }
@@ -74,6 +74,13 @@ impl<T: Clone+Send+Sync> AHTrie<T> {
         })
     }
 
+    async fn get_async(&self, key: &str) -> Option<T> {
+        if self.is_sample() {
+            self.trace(key);
+        }
+        self.inner.as_ref().read().await.get(key).cloned()
+    }
+
     pub fn get_mut<F>(&self, key: &str, f: F)
     where F: Fn(&mut T),
     {
@@ -87,10 +94,12 @@ impl<T: Clone+Send+Sync> AHTrie<T> {
     #[inline]
     fn trace(&self, key: &str) {
         debug!("start tracing");
+        let map = Arc::clone(&self.sampling_stat);
+        let k = key.to_string();
         // use runtime to trace the statistics asynchronously.
-        futures::executor::block_on(async {
-            self.sampling_stat
-                .entry(key.to_string())
+        tokio::task::spawn(async move {
+            map
+                .entry(k)
                 .and_modify(|v| v.reads += 1)
                 .or_insert(AccessStatistics { reads: 0 });
         });
