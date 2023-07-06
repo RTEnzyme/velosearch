@@ -9,6 +9,7 @@ pub mod utils;
 pub mod index;
 pub mod optimizer;
 pub mod datasources;
+pub mod jit;
 pub mod query;
 pub mod context;
 pub mod batch;

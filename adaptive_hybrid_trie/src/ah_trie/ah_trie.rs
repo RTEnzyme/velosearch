@@ -74,7 +74,7 @@ impl<T: Clone+Send+Sync> AHTrie<T> {
         })
     }
 
-    async fn get_async(&self, key: &str) -> Option<T> {
+    pub async fn get_async(&self, key: &str) -> Option<T> {
         if self.is_sample() {
             self.trace(key);
         }

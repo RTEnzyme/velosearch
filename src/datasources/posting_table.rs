@@ -6,7 +6,7 @@ use datafusion::{
     datasource::TableProvider, 
     logical_expr::TableType, execution::context::SessionState, prelude::Expr, error::{Result, DataFusionError}, 
     physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream, metrics::{ExecutionPlanMetricsSet, BaselineMetrics, MetricsSet}}, common::TermMeta};
-use futures::Stream;
+use futures::{Stream, future::BoxFuture};
 use adaptive_hybrid_trie::TermIdx;
 use tracing::debug;
 
@@ -238,7 +238,7 @@ impl PostingExec {
 
 pub struct PostingStream {
     /// Vector of recorcd batches
-    data: Vec<RecordBatch>,
+    data_future: BoxFuture<'static, Vec<RecordBatch>>,
     /// Schema representing the data
     schema: SchemaRef,
     /// Optional projection for which columns to load
@@ -249,6 +249,10 @@ pub struct PostingStream {
     term_idx: Arc<TermIdx<TermMeta>>,
     /// metric
     metric: BaselineMetrics,
+    /// data len
+    data_len: usize,
+    /// data
+    data: Option<Vec<RecordBatch>>,
 }
 
 impl PostingStream {
@@ -264,45 +268,53 @@ impl PostingStream {
     ) -> Result<Self> {
         debug!("Try new a PostingStream");
         let valid_cnt = min_range.true_count();
-        let distr: Vec<UInt16Array> = schema.fields().into_iter()
-            .map(|f| f.name())
-            .filter(|f| *f != "__id__")
-            .map(|f| match term_idx.get(f) {
-                Some(v) => filter(
-                    v.index.as_ref(),
-                    &min_range,
-                ).unwrap().as_any().downcast_ref::<UInt16Array>().unwrap().to_owned(),
-                None => UInt16Array::from(vec![None; valid_cnt]),
-            })
-            .collect();
-        let mut project_idx = vec![vec![]; distr[0].len()];
-        debug!("Obtain the project idx");
-        for terms in distr {
-            for (i, term) in terms.into_iter().enumerate() {
-                project_idx[i].push(term.map(|v| v as usize))
+        let data_len = data.len();
+
+        let schema_async = schema.clone();
+        let term_async = term_idx.clone();
+        let valid_data = async move {
+            let distr: Vec<UInt16Array> = schema_async.fields().into_iter()
+                .map(|f| f.name())
+                .filter(|f| *f != "__id__")
+                .map(|f| match term_async.get(f) {
+                    Some(v) => filter(
+                        v.index.as_ref(),
+                        &min_range,
+                    ).unwrap().as_any().downcast_ref::<UInt16Array>().unwrap().to_owned(),
+                    None => UInt16Array::from(vec![None; valid_cnt]),
+                })
+                .collect();
+            let mut project_idx = vec![vec![]; distr[0].len()];
+            debug!("Obtain the project idx");
+            for terms in distr {
+                for (i, term) in terms.into_iter().enumerate() {
+                    project_idx[i].push(term.map(|v| v as usize))
+                }
             }
-        }
-        // project_fold传入&[Option<usize>]和projected_schema
-        let valid_data: Vec<RecordBatch> = data.as_ref().into_iter()
-            .zip(project_idx.into_iter())
-            .zip(min_range.into_iter())
-            .filter(|(_, v)| v.unwrap())
-            .map(|((d, p), _)| if is_via {
-                d.project_fold(&p, schema.clone()).map_err(|e| DataFusionError::Execution(e.to_string()))
-            } else {
-                d.project_adapt(&p, schema.clone()).map_err(|e| DataFusionError::Execution(e.to_string()))
-            })
-            .collect::<Result<_>>()?;
+            // project_fold传入&[Option<usize>]和projected_schema
+            data.as_ref().into_iter()
+                .zip(project_idx.into_iter())
+                .zip(min_range.into_iter())
+                .filter(|(_, v)| v.unwrap())
+                .map(|((d, p), _)| if is_via {
+                    d.project_fold(&p, schema_async.clone()).map_err(|e| DataFusionError::Execution(e.to_string()))
+                } else {
+                    d.project_adapt(&p, schema_async.clone()).map_err(|e| DataFusionError::Execution(e.to_string()))
+                })
+                .collect::<Result<Vec<RecordBatch>>>().unwrap()
+        };
         debug!("Obtain the valid distri");
         
         debug!("Finish Trying new a PostingStream");
         Ok(Self {
-            data: valid_data,
+            data_future: Box::pin(valid_data),
             schema,
             projection,
             is_via,
             term_idx,
             metric,
+            data_len,
+            data: None,
         })
     }
 }
@@ -310,19 +322,28 @@ impl PostingStream {
 impl Stream for PostingStream {
     type Item = Result<RecordBatch>;
 
-    fn poll_next(mut self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
-        let poll = Poll::Ready(if self.data.len() > 0 {
-            let batch =self.data.remove(0);
+    fn poll_next(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
+        if self.data.is_none() {
+            let res: Poll<Vec<RecordBatch>> = futures::Future::poll(self.data_future.as_mut(), cx);
+            match res {
+                Poll::Ready(v) => self.data = Some(v),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+        let data = self.data.as_mut() .unwrap();
+        let poll = Poll::Ready(if data.len() > 0 {
+            let batch = data.remove(0);
             // return just the columns requested
             Some(Ok(batch))
         } else {
             None
         });
         poll
+        
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.data.len(), Some(self.data.len()))
+        (self.data_len, Some(self.data_len))
     }
 }
 
