@@ -5,7 +5,7 @@ use std::{collections::{HashMap, VecDeque}, sync::Arc, fmt::{Display, Formatter}
 use parking_lot::Mutex;
 
 use crate::utils::{Result, FastErr};
-use super::ast::{JITType, Stmt, Expr, BOOL, TypedLit, Literal, BinaryExpr, NIL};
+use super::{ast::{JITType, Stmt, Expr, BOOL, TypedLit, Literal, BinaryExpr, NIL}, jit::JIT};
 
 /// External Function signature
 struct ExternFuncSignature {
@@ -97,7 +97,7 @@ impl Assembler {
 
     /// Create JIT env which we could compile the AST of constructed function
     /// into runable code
-    pub fn create_jit(&self) {
+    pub fn create_jit(&self) -> JIT {
         let symbols = self
             .state
             .lock()
@@ -105,8 +105,7 @@ impl Assembler {
             .values()
             .map(|s| (s.name.clone(), s.code))
             .collect::<Vec<_>>();
-        // JIT::new(symbols)
-        unimplemented!()
+        JIT::new(symbols)
     }
 }
 
@@ -468,6 +467,11 @@ impl<'a> CodeBlock<'a> {
     /// Shorthand to create boolean literal
     pub fn lit_b(&self, val: impl Into<u8>) -> Expr {
         Expr::Literal(Literal::Typed(TypedLit::Bool(val.into())))
+    }
+
+    /// Shorthand to create i64 literal
+    pub fn lit_i64(&self, val: impl Into<i64>) -> Expr {
+        Expr::Literal(Literal::Typed(TypedLit::I64(val.into())))
     }
 
     /// Create a reference to an already defined variable.

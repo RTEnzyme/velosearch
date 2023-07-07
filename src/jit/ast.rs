@@ -16,6 +16,7 @@ pub enum Stmt {
     Declare(String, JITType),
     /// store value (the first expr) tp an address (the second expr)
     Store(Box<Expr>, Box<Expr>),
+
 }
 
 impl Stmt {
@@ -81,6 +82,7 @@ impl Display for Stmt {
 pub enum TypedLit {
     U8(u8),
     U16(u16),
+    I64(i64),
     Bool(u8),
 }
 
@@ -89,6 +91,7 @@ impl TypedLit {
         match self {
             TypedLit::U8(_) => U8,
             TypedLit::U16(_) => U16,
+            TypedLit::I64(_) => I64,
             TypedLit::Bool(_) => BOOL,
         }
     }
@@ -100,6 +103,7 @@ impl Display for TypedLit {
             TypedLit::Bool(b) => write!(f, "{b}"),
             TypedLit::U8(u) => write!(f, "{u}"),
             TypedLit::U16(u) => write!(f, "{u}"),
+            TypedLit::I64(i) => write!(f, "{i}"),
         }
     }
 }
@@ -117,6 +121,8 @@ pub enum Expr {
     Call(String, Vec<Expr>, JITType),
     /// Load a value from pointer
     Load(Box<Expr>, JITType),
+    /// Boolean Expression
+    BooleanExpr(BooleanExpr)
 }
 
 impl Expr {
@@ -127,6 +133,7 @@ impl Expr {
             Expr::Binary(bin) => bin.get_type(),
             Expr::Call(_, _, ty) => *ty,
             Expr::Load(_, ty) => *ty,
+            Expr::BooleanExpr(b) => b.get_type(),
         }
     }
 }
@@ -137,6 +144,7 @@ impl Display for Expr {
             Expr::Literal(l) => write!(f, "{l}"),
             Expr::Identifier(name, _) => write!(f, "{name}"),
             Expr::Binary(be) => write!(f, "{be}"),
+            Expr::BooleanExpr(b) => write!(f, "{b}"),
             Expr::Call(name, exprs, _) => {
                 write!(
                     f,
@@ -295,6 +303,29 @@ impl Display for BinaryExpr {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum Dnf {
+    Not(Expr),
+    Normal(Expr),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BooleanExpr {
+    pub(crate) cnf: Vec<Vec<Dnf>>,
+}
+
+impl BooleanExpr {
+    fn get_type(&self) -> JITType {
+        U8
+    }
+}
+
+impl Display for BooleanExpr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "eval({:?})", self.cnf)
+    }
+}
+
 /// null type as placeholder
 pub const NIL: JITType = JITType {
     native: ir::types::INVALID,
@@ -318,6 +349,11 @@ pub const U16: JITType = JITType {
     native: ir::types::I16,
     code: 0x77,
 };
+/// integer of 8 bytes
+pub const I64: JITType = JITType {
+    native: ir::types::I64,
+    code: 0x79,
+};
 
 pub const R32: JITType = JITType {
     native: ir::types::R32,
@@ -328,3 +364,6 @@ pub const R64: JITType = JITType {
     native: ir::types::R64,
     code: 0x7f,
 };
+pub const PTR_SIZE: usize = std::mem::size_of::<usize>();
+/// The pointer type to use based on our currently target.
+pub const PTR: JITType = if PTR_SIZE == 8 { R64 } else { R32 };
