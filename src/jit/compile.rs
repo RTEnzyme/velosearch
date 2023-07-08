@@ -1,8 +1,7 @@
 //! Compile Expr to JIT'd function
-use crate::jit::ast::{Literal, U8};
 use crate::utils::Result;
 use super::api::Assembler;
-use super::ast::{JITType, U16};
+use super::ast::JITType;
 use super::{
     api::GeneratedFunction,
     ast::{Expr as JITExpr, I64, PTR_SIZE},
@@ -13,7 +12,7 @@ pub fn build_calc_fn(
     assembler: &Assembler,
     jit_expr: JITExpr,
     inputs: Vec<(String, JITType)>,
-    ret_type: JITType,
+    _ret_type: JITType,
 ) -> Result<GeneratedFunction> {
     // Alias pointer type.
     // The raw pointer `R64` or `R32` is not compatible with integers.
@@ -57,7 +56,7 @@ pub fn build_calc_fn(
 
 #[cfg(test)]
 mod test {
-    use crate::jit::{ast::{Expr, BooleanExpr, Dnf, JITType, U8, I64}, api::Assembler};
+    use crate::jit::{ast::{Expr, BooleanExpr, Dnf, U8}, api::Assembler};
 
     use super::build_calc_fn;
 
@@ -68,7 +67,10 @@ mod test {
         let jit_expr = Expr::BooleanExpr(BooleanExpr {
             cnf: vec![
                 vec![Dnf::Normal(Expr::Identifier("test".to_string(), U8))],
-                vec![Dnf::Normal(Expr::Identifier("test2".to_string(), U8))],
+                vec![
+                    Dnf::Normal(Expr::Identifier("test2".to_string(), U8)),
+                    Dnf::Normal(Expr::Identifier("test3".to_string(), U8))
+                ],
             ],
         });
         // allocate memory for calc result
@@ -79,23 +81,25 @@ mod test {
         let input_fields = vec![
             ("test".to_string(), U8),
             ("test2".to_string(), U8),
+            ("test3".to_string(), U8),
         ];
         let gen_func = build_calc_fn(&assembler, jit_expr, input_fields, U8).unwrap();
         println!("{}", &gen_func);
         let mut jit = assembler.create_jit();
         let code_ptr = jit.compile(gen_func).unwrap();
         let code_fn = unsafe {
-            core::mem::transmute::<_, fn(*const i64, *const i64, *const u8, i64) -> ()>(
+            core::mem::transmute::<_, fn(*const u8, *const u8, *const u8, *const u8, i64) -> ()>(
                 code_ptr,
             )
         };
-        println!("{:?}", code_fn);
+
         code_fn(
-            vec![0xFF, 0x0].as_ptr(),
+            vec![0x11, 0x0].as_ptr(),
             vec![0x01, 0x01].as_ptr(),
+            vec![0x10, 0xFF].as_ptr(),
             result.as_ptr(),
             2,
         );
-        println!("{:?}", result);
+        assert_eq!(result, vec![17, 0]);
     }
 }

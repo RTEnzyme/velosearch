@@ -356,10 +356,6 @@ impl<'a> FunctionTranslator<'a> {
         self.builder.ins().bor(lhs, rhs)
     }
 
-    fn translate_bitwise_ornot(&mut self, lhs: Value, rhs: Value) -> Value {
-        self.builder.ins().bor_not(lhs, rhs)
-    }
-
     fn translate_binary_expr(&mut self, expr: BinaryExpr) -> Result<Value> {
         match expr {
             BinaryExpr::Eq(lhs, rhs) => {
