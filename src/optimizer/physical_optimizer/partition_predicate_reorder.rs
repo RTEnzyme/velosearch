@@ -37,26 +37,28 @@ impl PhysicalOptimizerRule for PartitionPredicateReorder {
                         .enumerate()
                         .map(|(i, f)| (f.name().as_str(), i))
                         .collect();
-                    let reorder_predicate: HashMap<usize, Arc<dyn PhysicalExpr>> = stats
+                    if let Some(ref cnf) = predicate.cnf_predicates {
+                        let reorder_predicate: HashMap<usize, Arc<dyn PhysicalExpr>> = stats
                         .iter()
                         .map(|p| {
-                            let mut cnf: Vec<Dnf> = predicate
-                                .cnf_predicates
+                            let mut cnf: Vec<Dnf> = cnf
                                 .iter()
                                 .map(|dnf| dnf.with_selectivity(&term2idx, p))
                                 .collect();
                             cnf.sort_by(|l, r| l.selectivity().partial_cmp(&r.selectivity()).unwrap());
                             cnf
                         })
-                        .map(|cnf| Arc::new(BooleanQueryExpr::new(cnf)) as Arc<dyn PhysicalExpr>)
+                        .map(|c| Arc::new(BooleanQueryExpr::new_with_cnf(predicate.predicate_tree.clone(), c)) as Arc<dyn PhysicalExpr>)
                         .enumerate()
                         .collect();
-                    Ok(Arc::new(BooleanExec::try_new(
-                        reorder_predicate,
-                        boolean.input.clone(),
-                        boolean.is_via.clone(),
-                        boolean.terms_stats.clone(),
-                    )?))
+                        Ok(Arc::new(BooleanExec::try_new(
+                            reorder_predicate,
+                            boolean.input.clone(),
+                            boolean.terms_stats.clone(),
+                        )?))
+                    } else {
+                        Ok(plan)
+                    }
                 }
                 None => Ok(plan)
             }

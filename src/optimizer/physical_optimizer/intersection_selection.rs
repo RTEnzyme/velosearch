@@ -1,12 +1,12 @@
 //! IntersectionSelection optimizer that choose the better algorithm
 //! from `PIA` and `VIA`
 
-use std::sync::Arc;
+use std::{sync::Arc, collections::HashMap};
 
-use datafusion::{physical_optimizer::PhysicalOptimizerRule, physical_plan::{ExecutionPlan, boolean::BooleanExec, rewrite::TreeNodeRewritable}, physical_expr::BooleanQueryExpr};
+use datafusion::{physical_optimizer::PhysicalOptimizerRule, physical_plan::{ExecutionPlan, boolean::BooleanExec, rewrite::TreeNodeRewritable, PhysicalExpr}, physical_expr::BooleanQueryExpr};
 use datafusion::common::Result;
 
-use crate::datasources::posting_table::PostingExec;
+use crate::{datasources::posting_table::PostingExec, jit::create_boolean_query_fn};
 /// Optimizer rule that choose intersection algorithm using selectivity
 #[derive(Default)]
 pub struct IntersectionSelection {}
@@ -25,25 +25,28 @@ impl PhysicalOptimizerRule for IntersectionSelection {
         _config: &datafusion::config::ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(boolean) = plan.as_any().downcast_ref::<BooleanExec>() {
-            let is_via: Vec<bool> = boolean
+            let inputs = boolean.schema().fields().into_iter().map(|f| f.name().as_str()).collect();
+            let predicates: HashMap<usize, Arc<dyn PhysicalExpr>> = boolean
                 .predicate
-                .values()
-                .map(|p| {
-                    if let Some(boolean) = p.as_any().downcast_ref::<BooleanQueryExpr>() {
-                        if boolean.cnf_predicates[0].selectivity() < 0.05 {
-                            false
-                        } else {
-                            true
+                .into_iter()
+                .map(|(i, p)| {
+                    if let Some(expr) = p.as_any().downcast_ref::<BooleanQueryExpr>() {
+                        if let Some(ref cnf) = expr.cnf_predicates {
+                            if cnf[0].selectivity() < 0.05  {
+                                let gen_fn = create_boolean_query_fn(
+                                    cnf,
+                                    inputs,
+                                );
+                                return (i, Arc::new(BooleanQueryExpr::new_with_fn(expr.predicate_tree, gen_fn)) as Arc<dyn PhysicalExpr>);
+                            }
                         }
-                    } else {
-                        true
                     }
+                    (i, p)
                 })
                 .collect();
             plan.transform_up(&|p| {
                 if let Some(posting) = p.as_any().downcast_ref::<PostingExec>() {
                     let mut input = (*posting).clone();
-                    input.is_via = Some(is_via.clone());
                     Ok(Some(Arc::new(
                         PostingExec::try_new(
                             input.partitions.to_owned(),
@@ -51,15 +54,13 @@ impl PhysicalOptimizerRule for IntersectionSelection {
                             input.schema,
                             input.projection,
                             input.partition_min_range,
-                            Some(is_via.clone()),
                         )?
                     )))
                 } else if let Some(boolean) = p.as_any().downcast_ref::<BooleanExec>() {
                     Ok(Some(Arc::new(
                         BooleanExec::try_new(
-                            boolean.predicate.clone(),
+                            predicates,
                             boolean.input.clone(),
-                            Some(is_via.clone()),
                             boolean.terms_stats.clone(),
                         )?
                     )))

@@ -1,12 +1,50 @@
 //! Compile Expr to JIT'd function
 
+use datafusion::physical_plan::expressions::Dnf as DDnf;
+
 use crate::utils::Result;
 use super::api::Assembler;
-use super::ast::JITType;
+use super::ast::{JITType, Dnf, U8, BooleanExpr};
 use super::{
     api::GeneratedFunction,
     ast::{Expr as JITExpr, I64, PTR_SIZE},
 };
+
+pub fn create_boolean_query_fn(
+    cnf: &Vec<DDnf>,
+    inputs: &Vec<&str>,
+) -> Box<dyn Fn(*const *const u8, *const u8, i64) -> ()> {
+    let assembler = Assembler::default();
+    let cnf = cnf.into_iter()
+        .map(|v| {
+            v.into_iter()
+            .map(|d| {
+                Dnf::Normal(JITExpr::Identifier(d, U8))
+            })
+            .collect()
+        })
+        .collect();
+    let jit_expr = JITExpr::BooleanExpr(BooleanExpr {
+        cnf,
+    });
+    let inputs = inputs.into_iter()
+        .map(|v| (v.to_string(), U8))
+        .collect();
+    let gen_func = build_calc_fn(
+        &assembler,
+        jit_expr,
+        inputs,
+        U8,
+    ).unwrap();
+    let mut jit = assembler.create_jit();
+    let code_ptr = jit.compile(gen_func).unwrap();
+    let code_fn = unsafe {
+        core::mem::transmute::<_, fn(*const *const u8, *const u8, i64) -> ()>(
+            code_ptr,
+        )
+    };
+    Box::new(code_fn)
+}
 
 /// Wrap JIT Expr to array compute function.
 pub fn build_calc_fn(

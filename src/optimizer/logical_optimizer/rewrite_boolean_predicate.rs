@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{cmp::max, collections::HashSet};
+use std::cmp::max;
 
 use datafusion::{
     optimizer::{OptimizerRule, OptimizerConfig, optimizer::ApplyOrder},

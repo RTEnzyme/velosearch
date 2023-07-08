@@ -164,7 +164,6 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
             Ok(Arc::new(BooleanExec::try_new(
                 boolean.predicate.to_owned(),
                 boolean.input().clone(),
-                boolean.is_via.to_owned(),
                 Some(term_stats),
             )?))
         } else if let Some(posting) = node.as_any().downcast_ref::<PostingExec>() {
@@ -176,7 +175,6 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                 posting.schema.to_owned(),
                 posting.projection.to_owned(),
                 min_range,
-                posting.is_via.to_owned(),
             )?))
         }else {
             Ok(node)

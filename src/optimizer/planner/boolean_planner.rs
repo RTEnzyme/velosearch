@@ -10,7 +10,7 @@ use datafusion::{
         logical_expr::{
             LogicalPlan, expr::BooleanQuery, BinaryExpr, PlanType, ToStringifiedPlan, Projection, TableScan, expr_rewriter::unnormalize_cols, StringifiedPlan, Operator
         },
-        physical_expr::boolean_query,
+        physical_expr::{boolean_query, boolean_query_with_cnf},
         common::DFSchema, arrow::datatypes::{Schema, SchemaRef}, 
         prelude::Expr, physical_expr::execution_props::ExecutionProps, datasource::source_as_provider, 
         optimizer::utils::unalias, 
@@ -129,12 +129,35 @@ impl BooleanPhysicalPlanner {
                     let input_schema = physical_input.as_ref().schema();
                     let input_dfschema = boolean.input.schema();
                     debug!("Create boolean predicate");
-                    let runtime_expr = self.create_physical_expr(
-                        &boolean.predicate,
-                        input_dfschema,
-                        &input_schema,
-                        session_state,
-                    )?;
+                    // let runtime_expr = self.create_physical_expr(
+                    //     &boolean.predicate,
+                    //     input_dfschema,
+                    //     &input_schema,
+                    //     session_state,
+                    // )?;
+                    let runtime_expr = if let Expr::BooleanQuery(predicate) = boolean.predicate {
+                        let binary_expr = self.create_physical_expr(&Expr::BinaryExpr(BinaryExpr{
+                            left: predicate.left,
+                            op: predicate.op,
+                            right: predicate.right,
+                        }), input_dfschema, &input_schema, session_state)?;
+                        // If the height of predicate is large than 5, choose Vectorized Boolean Query
+                        if boolean.height > 5 {
+                            boolean_query(binary_expr, &input_schema)
+                        } else {
+                            let mut cnf_predicates = CnfPredicate::new(
+                                &predicate,
+                                input_dfschema,
+                                &input_schema,
+                                session_state.execution_props(),
+                            );
+                            cnf_predicates.flatten_cnf_predicate();
+                            let cnf_predicates = cnf_predicates.collect();
+                            boolean_query_with_cnf(cnf_predicates, binary_expr, &input_schema)
+                        }
+                    } else {
+                        unreachable!()
+                    }?;
                     debug!("Optimize predicate on every partition");
                     // Should Optimize predicate on every partition.
                     let num_partition = physical_input.output_partitioning().partition_count();
@@ -320,16 +343,20 @@ fn create_physical_expr(
             binary(lhs, *op, rhs, input_schema)
         }
         Expr::BooleanQuery(boolean) => {
-            let mut cnf_predicates = CnfPredicate::new(
-                boolean,
-                input_dfschema,
-                input_schema,
-                execution_props,
-            );
-            cnf_predicates.flatten_cnf_predicate();
-            let cnf_predicates = cnf_predicates.collect();
-            
-            boolean_query(cnf_predicates, input_schema)
+            // let mut cnf_predicates = CnfPredicate::new(
+            //     boolean,
+            //     input_dfschema,
+            //     input_schema,
+            //     execution_props,
+            // );
+            // cnf_predicates.flatten_cnf_predicate();
+            // let cnf_predicates = cnf_predicates.collect();
+            let binary_expr = create_physical_expr(&Expr::BinaryExpr(BinaryExpr{
+                left: boolean.left,
+                op: boolean.op,
+                right: boolean.right,
+            }), input_dfschema, input_schema, execution_props)?;
+            boolean_query(binary_expr, input_schema)
         }
         Expr::Not(expr) => expressions::not(create_physical_expr(
             expr,

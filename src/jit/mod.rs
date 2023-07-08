@@ -3,6 +3,7 @@ pub mod api;
 pub mod compile;
 pub mod jit;
 
+pub use compile::create_boolean_query_fn;
 
 #[cfg(test)]
 mod test {
