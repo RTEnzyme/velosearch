@@ -1,4 +1,5 @@
-use std::{sync::Arc};
+
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -6,14 +7,14 @@ use datafusion::{
     execution::{context::{SessionState, QueryPlanner}, runtime_env::RuntimeEnv}, 
     prelude::{SessionConfig, Expr, Column}, sql::TableReference, logical_expr::{LogicalPlanBuilder, LogicalPlan}, 
     datasource::{provider_as_source, TableProvider}, error::DataFusionError, 
-    optimizer::{OptimizerRule, rewrite_disjunctive_predicate::RewriteDisjunctivePredicate}, 
+    optimizer::OptimizerRule, 
     physical_optimizer::PhysicalOptimizerRule, scalar::ScalarValue, physical_plan::{PhysicalPlanner, ExecutionPlan}
 };
 use parking_lot::RwLock;
 use tokio::time::Instant;
 use tracing::debug;
 
-use crate::{query::boolean_query::BooleanQuery, utils::FastErr, BooleanPhysicalPlanner, IntersectionSelection, MinOperationRange, PartitionPredicateReorder};
+use crate::{query::boolean_query::BooleanQuery, utils::FastErr, BooleanPhysicalPlanner, IntersectionSelection, MinOperationRange, PartitionPredicateReorder, RewriteBooleanPredicate};
 use crate::utils::Result;
 
 #[derive(Clone)]
@@ -173,7 +174,7 @@ impl BooleanContext {
 fn optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Sync + Send>> {
     vec![
         // Arc::new(SimplifyExpressions::new()),
-        Arc::new(RewriteDisjunctivePredicate::new()),
+        Arc::new(RewriteBooleanPredicate::new()),
         // Arc::new(SimplifyExpressions::new()),
         // Arc::new(EliminateFilter::new()),
         // Arc::new(PushDownFilter::new()),

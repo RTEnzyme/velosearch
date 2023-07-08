@@ -4,4 +4,4 @@ mod logical_optimizer;
 
 pub use planner::boolean_planner::BooleanPhysicalPlanner;
 pub use physical_optimizer::{IntersectionSelection, MinOperationRange, PartitionPredicateReorder};
-pub use logical_optimizer::PushDownProjection;
+pub use logical_optimizer::{RewriteBooleanPredicate, PushDownProjection};

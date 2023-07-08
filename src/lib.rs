@@ -15,7 +15,7 @@ pub mod context;
 pub mod batch;
 pub use utils::Result;
 pub use context::BooleanContext;
-pub use optimizer::{BooleanPhysicalPlanner, IntersectionSelection, MinOperationRange, PartitionPredicateReorder};
+pub use optimizer::{BooleanPhysicalPlanner, IntersectionSelection, MinOperationRange, PartitionPredicateReorder, RewriteBooleanPredicate};
 
 use clap::{Parser, ValueEnum};
 
