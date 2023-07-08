@@ -36,7 +36,6 @@ pub fn build_calc_fn(
         |cond| cond.lt(cond.id("index")?, cond.id("len")?),
         |w| {
             w.declare_as("offset", w.mul(w.id("index")?, w.lit_i64(PTR_SIZE as i64))?)?;
-            println!("hint1");
             for (name, ty) in &inputs {
                 w.declare_as(
                     format!("{name}_ptr"),
@@ -44,11 +43,9 @@ pub fn build_calc_fn(
                 )?;
                 w.declare_as(name, w.load(w.id(format!("{name}_ptr"))?, *ty)?)?;
             }
-            println!("hint2");
             w.declare_as("res_ptr", w.add(w.id("result")?, w.id("offset")?)?)?;
             w.declare_as("res", jit_expr.clone())?;
             w.store(w.id("res")?, w.id("res_ptr")?)?;
-            println!("hint3");
             w.assign("index", w.add(w.id("index")?, w.lit_i64(1))?)?;
             Ok(())
         },
