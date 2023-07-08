@@ -4,6 +4,7 @@ use crate::utils::{Result, FastErr};
 use cranelift::prelude::*;
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{Linkage, Module};
+use tracing::debug;
 use std::collections::HashMap;
 
 /// The basic JIT class
@@ -108,7 +109,7 @@ impl JIT {
 
         // Translate the AST nodes into Cranelift IR.
         self.translate(params, ret, body)?;
-        println!("start compile");
+
         // Next, declare the function to jit. Functions must be declared
         // before they can be called, or defined.
         let id = self
@@ -139,7 +140,6 @@ impl JIT {
         // outstanding relocations (patching in addresses, now that they're
         // available).
         self.module.finalize_definitions().unwrap();
-
         // We can now retrieve a pointer to the machine code.
         let code = self.module.get_finalized_function(id);
 
@@ -231,6 +231,7 @@ impl JIT {
         }
 
         // Tell the builder we're done with this function.
+        debug!("{:?}",trans.builder.func);
         trans.builder.finalize();
         Ok(())
     }
@@ -304,7 +305,6 @@ impl<'a> FunctionTranslator<'a> {
         self.builder.append_block_param(else_block, U8.native);
         let mut init_v = self.builder.ins().iconst(U8.native, 0xFF);
         for mut e in expr.cnf.into_iter() {
-            println!("start");
             let mut value = match e.remove(0) {
                 Dnf::Normal(v) => self.translate_expr(v).unwrap(),
                 Dnf::Not(v) => {
@@ -334,7 +334,6 @@ impl<'a> FunctionTranslator<'a> {
             self.builder.seal_block(body_block);
         }
         self.builder.ins().jump(else_block, &[init_v]);
-        println!("end");
         self.builder.switch_to_block(else_block);
         self.builder.seal_block(else_block);
         Ok(self.builder.block_params(else_block)[0])
