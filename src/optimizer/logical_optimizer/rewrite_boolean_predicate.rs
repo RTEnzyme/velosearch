@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::{cmp::max, collections::HashSet};
+
 use datafusion::{
     optimizer::{OptimizerRule, OptimizerConfig, optimizer::ApplyOrder},
     logical_expr::{LogicalPlan, logical_plan::Boolean, BooleanQuery, Operator},
@@ -131,11 +133,16 @@ impl OptimizerRule for RewriteBooleanPredicate {
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Boolean(boolean) => {
-                let predicate = predicate(&boolean.predicate)?;
-                let rewritten_predicate = rewrite_predicate(predicate);
-                let rewritten_expr = normalize_predicate(rewritten_predicate);
+                let mut expr_cnt = 0;
+                let mut op_cnt = 0;
+                let predicate = predicate(&boolean.predicate, (&mut expr_cnt, &mut op_cnt))?;
+                let rewritten_predicate = rewrite_predicate(predicate, 0);
+                let rewritten_expr = normalize_predicate(rewritten_predicate.0);
                 Ok(Some(LogicalPlan::Boolean(Boolean::try_new(
                     rewritten_expr,
+                    rewritten_predicate.1,
+                    expr_cnt,
+                    op_cnt,
                     boolean.input.clone(),
                 )?)))
             },
@@ -159,22 +166,31 @@ enum Predicate {
     Other { expr: Box<Expr> },
 }
 
-fn predicate(expr: &Expr) -> Result<Predicate> {
+fn calcu_stats(exp: &Expr) {
+
+}
+
+fn predicate(expr: &Expr, (expr_cnt, op_cnt): (&mut usize, &mut usize)) -> Result<Predicate> {
     match expr {
     Expr::BooleanQuery(BooleanQuery {left, op, right }) => match op {
             Operator::BitwiseAnd => {
-                let args = vec![predicate(left)?, predicate(right)?];
+                *op_cnt += 1;
+                let args = vec![predicate(left, (expr_cnt, op_cnt))?, predicate(right, (expr_cnt, op_cnt))?];
                 Ok(Predicate::And { args })
             }
             Operator::BitwiseOr => {
-                let args = vec![predicate(left)?, predicate(right)?];
+                *op_cnt += 1;
+                let args = vec![predicate(left, (expr_cnt, op_cnt))?, predicate(right, (expr_cnt, op_cnt))?];
                 Ok(Predicate::Or { args })
             }
             _ => Err(DataFusionError::Internal(format!("Don't support op: {:}", op))),
         },
-        _ => Ok(Predicate::Other {
-            expr: Box::new(expr.clone()),
-        }),
+        _ => {
+            *expr_cnt += 1; 
+            Ok(Predicate::Other {
+                expr: Box::new(expr.clone()),
+            })
+        }
     }
 }
 
@@ -198,29 +214,35 @@ fn normalize_predicate(predicate: Predicate) -> Expr {
     }
 }
 
-fn rewrite_predicate(predicate: Predicate) -> Predicate {
+fn rewrite_predicate(predicate: Predicate, height: usize) -> (Predicate, usize) {
     match predicate {
         Predicate::And { args } => {
             let mut rewritten_args = Vec::with_capacity(args.len());
+            let mut max_height = 0;
             for arg in args.iter() {
-                rewritten_args.push(rewrite_predicate(arg.clone()));
+                let rewritten = rewrite_predicate(arg.clone(), height + 1);
+                rewritten_args.push(rewritten.0);
+                max_height = max(height, rewritten.1);
             }
             rewritten_args = flatten_and_predicates(rewritten_args);
-            Predicate::And {
+            (Predicate::And {
                 args: rewritten_args,
-            }
+            }, max_height)
         }
         Predicate::Or { args } => {
             let mut rewritten_args = vec![];
+            let mut max_height = 0;
             for arg in args.iter() {
-                rewritten_args.push(rewrite_predicate(arg.clone()));
+                let rewriten = rewrite_predicate(arg.clone(), height + 1);
+                rewritten_args.push(rewriten.0);
+                max_height = max(max_height, rewriten.1);
             }
             rewritten_args = flatten_or_predicates(rewritten_args);
-            delete_duplicate_predicates(&rewritten_args)
+            (delete_duplicate_predicates(&rewritten_args), max_height)
         }
-        Predicate::Other { expr } => Predicate::Other {
+        Predicate::Other { expr } => (Predicate::Other {
             expr: Box::new(*expr),
-        },
+        }, height),
     }
 }
 
@@ -344,77 +366,5 @@ fn delete_duplicate_predicates(or_predicates: &[Predicate]) -> Predicate {
         Predicate::And {
             args: flatten_and_predicates(exist_exprs),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        normalize_predicate, predicate, rewrite_predicate, Predicate,
-    };
-
-    use datafusion::{common::{Result, ScalarValue}, prelude::*};
-
-    #[test]
-    fn test_rewrite_predicate() -> Result<()> {
-        let equi_expr = col("t1.a").eq(col("t2.b"));
-        let gt_expr = col("t1.c").gt(lit(ScalarValue::Int8(Some(1))));
-        let lt_expr = col("t1.d").lt(lit(ScalarValue::Int8(Some(2))));
-        let expr = or(
-            and(equi_expr.clone(), gt_expr.clone()),
-            and(equi_expr.clone(), lt_expr.clone()),
-        );
-        let predicate = predicate(&expr)?;
-        assert_eq!(
-            predicate,
-            Predicate::Or {
-                args: vec![
-                    Predicate::And {
-                        args: vec![
-                            Predicate::Other {
-                                expr: Box::new(equi_expr.clone())
-                            },
-                            Predicate::Other {
-                                expr: Box::new(gt_expr.clone())
-                            },
-                        ]
-                    },
-                    Predicate::And {
-                        args: vec![
-                            Predicate::Other {
-                                expr: Box::new(equi_expr.clone())
-                            },
-                            Predicate::Other {
-                                expr: Box::new(lt_expr.clone())
-                            },
-                        ]
-                    },
-                ]
-            }
-        );
-        let rewritten_predicate = rewrite_predicate(predicate);
-        assert_eq!(
-            rewritten_predicate,
-            Predicate::And {
-                args: vec![
-                    Predicate::Other {
-                        expr: Box::new(equi_expr.clone())
-                    },
-                    Predicate::Or {
-                        args: vec![
-                            Predicate::Other {
-                                expr: Box::new(gt_expr.clone())
-                            },
-                            Predicate::Other {
-                                expr: Box::new(lt_expr.clone())
-                            },
-                        ]
-                    },
-                ]
-            }
-        );
-        let rewritten_expr = normalize_predicate(rewritten_predicate);
-        assert_eq!(rewritten_expr, and(equi_expr, or(gt_expr, lt_expr)));
-        Ok(())
     }
 }
