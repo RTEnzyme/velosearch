@@ -1,4 +1,5 @@
 //! Compile Expr to JIT'd function
+
 use crate::utils::Result;
 use super::api::Assembler;
 use super::ast::JITType;
@@ -18,23 +19,39 @@ pub fn build_calc_fn(
     // The raw pointer `R64` or `R32` is not compatible with integers.
     const PTR_TYPE: JITType = I64;
 
-    let mut builder = assembler.new_func_builder("calc_fn");
+    let builder = assembler.new_func_builder("calc_fn");
     // Declare in-param.
     // Each input takes one position, following by a pointer to place result,
     // and the last is the length of inputs/output arrays.
-    for (name, _) in &inputs {
-        builder = builder.param(format!("{name}_array"), PTR_TYPE);
-    }
-    let mut builder = builder.param("result", PTR_TYPE).param("len", I64);
+    // for (name, _) in &inputs {
+    //     builder = builder.param(format!("{name}_array"), PTR_TYPE);
+    // }
+    let mut builder = builder
+        .param("batch", PTR_TYPE)
+        .param("result", PTR_TYPE)
+        .param("len", I64);
 
     // Start build function body.
     // It's loop that calculates the result one by one.
     let mut fn_body = builder.enter_block();
     fn_body.declare_as("index", fn_body.lit_i64(0))?;
+    for (id, (name, _)) in inputs.iter().enumerate() {
+        let ptr = fn_body.add(
+            fn_body.id("batch")?,
+            fn_body.mul(
+                fn_body.lit_i64(id as i64),
+                fn_body.lit_i64(PTR_SIZE as i64),
+            )?,
+        )?;
+        fn_body.declare_as(
+            format!("{name}_array"),
+            fn_body.load(ptr, PTR_TYPE)?,
+        )?;
+    }
     fn_body.while_block(
         |cond| cond.lt(cond.id("index")?, cond.id("len")?),
         |w| {
-            w.declare_as("offset", w.mul(w.id("index")?, w.lit_i64(PTR_SIZE as i64))?)?;
+            w.declare_as("offset", w.mul(w.id("index")?, w.lit_i64(1))?)?;
             for (name, ty) in &inputs {
                 w.declare_as(
                     format!("{name}_ptr"),
@@ -88,18 +105,24 @@ mod test {
         let mut jit = assembler.create_jit();
         let code_ptr = jit.compile(gen_func).unwrap();
         let code_fn = unsafe {
-            core::mem::transmute::<_, fn(*const u8, *const u8, *const u8, *const u8, i64) -> ()>(
+            core::mem::transmute::<_, fn(*const *const u8, *const u8, i64) -> ()>(
                 code_ptr,
             )
         };
-
+        let test = vec![0x11, 0x01];
+        let test2 = vec![0x01, 0x01];
+        let test3 = vec![0x10, 0xFF];
+        let values = vec![
+            test.as_ptr(),
+            test2.as_ptr(),
+            test3.as_ptr(),
+        ];
+        println!("{:?}", values);
         code_fn(
-            vec![0x11, 0x0].as_ptr(),
-            vec![0x01, 0x01].as_ptr(),
-            vec![0x10, 0xFF].as_ptr(),
+            values.as_ptr(),
             result.as_ptr(),
             2,
         );
-        assert_eq!(result, vec![17, 0]);
+        assert_eq!(result, vec![17, 1]);
     }
 }

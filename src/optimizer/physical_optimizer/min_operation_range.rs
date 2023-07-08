@@ -11,7 +11,6 @@ use datafusion::{
     arrow::{datatypes::Schema, array::{BooleanArray, ArrayRef}, record_batch::RecordBatch}, common::TermMeta, from_slice::FromSlice
 };
 use datafusion::common::Result;
-use rayon::prelude::*;
 use tracing::debug;
 
 use crate::datasources::posting_table::PostingExec;
