@@ -1,6 +1,5 @@
 //! Compile Expr to JIT'd function
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::physical_plan::expressions::Dnf as DDnf;
@@ -17,13 +16,7 @@ use super::{
 
 pub fn create_boolean_query_fn(
     cnf: &Vec<DDnf>,
-    inputs: &Vec<&str>,
 ) -> Arc<BooleanQueryEvalFunc> {
-    let term2idx: HashMap<&str, i64> = inputs
-        .into_iter()
-        .enumerate()
-        .map(|(i, &s)| (s, i as i64))
-        .collect();
     let mut cnf_list = Vec::new();
     let cnf_num = cnf.len();
     let mut code: usize = 0;
@@ -34,9 +27,7 @@ pub fn create_boolean_query_fn(
         if v.predicates.len() == 2 {
             code |= 1 << i;
         }
-        for item in v.iter() {
-            cnf_list.push(term2idx[item.as_str()]);
-        }
+        cnf_list.extend_from_slice(v.predicates.as_slice());
     });
     let gen_fn = BOOLEAN_EVAL_FUNC[2_usize.pow(cnf_num as u32) - 2 + code].clone();
     Arc::new(

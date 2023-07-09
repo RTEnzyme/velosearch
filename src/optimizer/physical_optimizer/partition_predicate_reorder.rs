@@ -44,7 +44,7 @@ impl PhysicalOptimizerRule for PartitionPredicateReorder {
                         .map(|p| {
                             let mut cnf: Vec<Dnf> = cnf
                                 .iter()
-                                .map(|dnf| dnf.with_selectivity(&term2idx, p))
+                                .map(|dnf| dnf.with_selectivity(p))
                                 .collect();
                             cnf.sort_by(|l, r| l.selectivity().partial_cmp(&r.selectivity()).unwrap());
                             cnf

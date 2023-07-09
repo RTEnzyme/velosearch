@@ -24,10 +24,7 @@ impl PhysicalOptimizerRule for IntersectionSelection {
         plan: std::sync::Arc<dyn datafusion::physical_plan::ExecutionPlan>,
         _config: &datafusion::config::ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if let Some(boolean) = plan.as_any().downcast_ref::<BooleanExec>() {
-            let inputs_schema = boolean.schema();
-            let inputs =inputs_schema.fields().into_iter().map(|f| f.name().as_str()).collect();
-            
+        if let Some(_) = plan.as_any().downcast_ref::<BooleanExec>() {
             plan.transform_up(&|p| {
                 if let Some(posting) = p.as_any().downcast_ref::<PostingExec>() {
                     let input = (*posting).clone();
@@ -50,7 +47,6 @@ impl PhysicalOptimizerRule for IntersectionSelection {
                                 if cnf[0].selectivity() < 0.05  {
                                     let gen_fn = create_boolean_query_fn(
                                         cnf,
-                                        &inputs,
                                     );
                                     return (*i, Arc::new(BooleanQueryExpr::new_with_fn(expr.predicate_tree.clone(), gen_fn)) as Arc<dyn PhysicalExpr>);
                                 }
