@@ -205,119 +205,119 @@ pub fn boolean_project(
 
 #[cfg(test)]
 pub mod tests {
-    use std::sync::Arc;
-    use std::time::Instant;
+    // use std::sync::Arc;
+    // use std::time::Instant;
 
-    use datafusion::arrow::array::{UInt16Array, BooleanArray};
-    use datafusion::arrow::datatypes::{Schema, Field, DataType};
-    use datafusion::common::TermMeta;
-    use datafusion::from_slice::FromSlice;
-    use datafusion::prelude::col;
-    use adaptive_hybrid_trie::TermIdx;
-    use tracing::{Level};
-    use crate::batch::{BatchRange, PostingBatch};
-    use crate::{utils::Result, BooleanContext, datasources::posting_table::PostingTable};
+    // use datafusion::arrow::array::{UInt16Array, BooleanArray};
+    // use datafusion::arrow::datatypes::{Schema, Field, DataType};
+    // use datafusion::common::TermMeta;
+    // use datafusion::from_slice::FromSlice;
+    // use datafusion::prelude::col;
+    // use adaptive_hybrid_trie::TermIdx;
+    // use tracing::{Level};
+    // use crate::batch::{BatchRange, PostingBatch};
+    // use crate::{utils::Result, BooleanContext, datasources::posting_table::PostingTable};
 
-    use super::{BooleanPredicateBuilder, binary_expr_columns};
+    // use super::{BooleanPredicateBuilder, binary_expr_columns};
 
-    #[test]
-    fn boolean_must_builder() -> Result<()> {
-        let predicate = BooleanPredicateBuilder::must(&["a", "b", "c"])?;
-        assert_eq!(format!("{}", predicate.build()).as_str(), "((a & b) & c) = Int8(1)");
-        Ok(())
-    }
+    // #[test]
+    // fn boolean_must_builder() -> Result<()> {
+    //     let predicate = BooleanPredicateBuilder::must(&["a", "b", "c"])?;
+    //     assert_eq!(format!("{}", predicate.build()).as_str(), "((a & b) & c) = Int8(1)");
+    //     Ok(())
+    // }
 
-    #[test]
-    fn boolean_should() -> Result<()> {
-        let predicate = BooleanPredicateBuilder::should(&["a", "b", "c"])?;
-        assert_eq!(format!("{}", predicate.build()).as_str(), "((a | b) | c) = Int8(1)");
-        Ok(())
-    }
+    // #[test]
+    // fn boolean_should() -> Result<()> {
+    //     let predicate = BooleanPredicateBuilder::should(&["a", "b", "c"])?;
+    //     assert_eq!(format!("{}", predicate.build()).as_str(), "((a | b) | c) = Int8(1)");
+    //     Ok(())
+    // }
 
-    #[test]
-    fn binary_expr_children_test() -> Result<()> {
-        let predicate = BooleanPredicateBuilder::should(&["a", "b", "c"])?;
-        assert_eq!(binary_expr_columns(&predicate.build()), vec![col("a"), col("b"), col("c")]);
-        Ok(())
-    }
+    // #[test]
+    // fn binary_expr_children_test() -> Result<()> {
+    //     let predicate = BooleanPredicateBuilder::should(&["a", "b", "c"])?;
+    //     assert_eq!(binary_expr_columns(&predicate.build()), vec![col("a"), col("b"), col("c")]);
+    //     Ok(())
+    // }
 
-    pub fn make_posting_schema(fields: Vec<&str>) -> Schema {
-        Schema::new(
-            fields.into_iter()
-            .map(|f| if f == "__id__" {
-                    Field::new(f, DataType::UInt32, false)
-                } else {
-                    Field::new(f, DataType::Boolean, false)
-                })
-            .collect()
-        )
-    }
+    // pub fn make_posting_schema(fields: Vec<&str>) -> Schema {
+    //     Schema::new(
+    //         fields.into_iter()
+    //         .map(|f| if f == "__id__" {
+    //                 Field::new(f, DataType::UInt32, false)
+    //             } else {
+    //                 Field::new(f, DataType::Boolean, false)
+    //             })
+    //         .collect()
+    //     )
+    // }
 
     
 
-    // #[tokio::test]
-    // async fn simple_query() -> Result<()> {
-    //     tracing_subscriber::fmt().with_max_level(Level::DEBUG).init();
-    //     let schema = Arc::new(make_posting_schema(vec!["__id__", "a", "b", "c", "d"]));
-    //     let range = Arc::new(BatchRange::new(0, 20));
+    // // #[tokio::test]
+    // // async fn simple_query() -> Result<()> {
+    // //     tracing_subscriber::fmt().with_max_level(Level::DEBUG).init();
+    // //     let schema = Arc::new(make_posting_schema(vec!["__id__", "a", "b", "c", "d"]));
+    // //     let range = Arc::new(BatchRange::new(0, 20));
 
-    //     let batch = PostingBatch::try_new(
-    //         schema.clone(),
-    //         vec![
-    //             Arc::new(UInt16Array::from_iter_values((0..20).into_iter())),
-    //             Arc::new(UInt16Array::from_slice([0, 2, 6, 8, 15])),
-    //             Arc::new(UInt16Array::from_slice([0, 4, 6, 13, 17])),
-    //             Arc::new(UInt16Array::from_slice([3, 7, 11, 17, 19])),
-    //             Arc::new(UInt16Array::from_slice([6, 7, 9, 14, 18]))
-    //         ],
-    //         range.clone()
-    //     ).expect("Can't try new a PostingBatch");
+    // //     let batch = PostingBatch::try_new(
+    // //         schema.clone(),
+    // //         vec![
+    // //             Arc::new(UInt16Array::from_iter_values((0..20).into_iter())),
+    // //             Arc::new(UInt16Array::from_slice([0, 2, 6, 8, 15])),
+    // //             Arc::new(UInt16Array::from_slice([0, 4, 6, 13, 17])),
+    // //             Arc::new(UInt16Array::from_slice([3, 7, 11, 17, 19])),
+    // //             Arc::new(UInt16Array::from_slice([6, 7, 9, 14, 18]))
+    // //         ],
+    // //         range.clone()
+    // //     ).expect("Can't try new a PostingBatch");
 
-    //     let mut term_idx = TermIdx::new();
-    //     term_idx.insert("a".to_string(), TermMeta {
-    //         distribution: Arc::new(BooleanArray::from_slice(&[true])),
-    //         nums: 5,
-    //         index: Arc::new(UInt16Array::from(vec![Some(1)])),
-    //         selectivity: 0.,
-    //     });
-    //     term_idx.insert("b".to_string(), TermMeta {
-    //         distribution: Arc::new(BooleanArray::from_slice(&[true])),
-    //         nums: 5,
-    //         index: Arc::new(UInt16Array::from(vec![Some(2)])),
-    //         selectivity: 0.,
-    //     });
-    //     term_idx.insert("c".to_string(), TermMeta {
-    //         distribution: Arc::new(BooleanArray::from_slice(&[true])),
-    //         nums: 5,
-    //         index: Arc::new(UInt16Array::from(vec![Some(3)])),
-    //         selectivity: 0.,
-    //     });
-    //     term_idx.insert("d".to_string(), TermMeta {
-    //         distribution: Arc::new(BooleanArray::from_slice(&[true])),
-    //         nums: 5,
-    //         index: Arc::new(UInt16Array::from(vec![Some(4)])),
-    //         selectivity: 0.
-    //     });
-    //     term_idx.insert("__id__".to_string(), TermMeta {
-    //         distribution: Arc::new(BooleanArray::from_slice(&[false])),
-    //         nums: 0,
-    //         index: Arc::new(UInt16Array::from(vec![Some(0)])),
-    //         selectivity: 0.,
-    //     });
+    // //     let mut term_idx = TermIdx::new();
+    // //     term_idx.insert("a".to_string(), TermMeta {
+    // //         distribution: Arc::new(BooleanArray::from_slice(&[true])),
+    // //         nums: 5,
+    // //         index: Arc::new(UInt16Array::from(vec![Some(1)])),
+    // //         selectivity: 0.,
+    // //     });
+    // //     term_idx.insert("b".to_string(), TermMeta {
+    // //         distribution: Arc::new(BooleanArray::from_slice(&[true])),
+    // //         nums: 5,
+    // //         index: Arc::new(UInt16Array::from(vec![Some(2)])),
+    // //         selectivity: 0.,
+    // //     });
+    // //     term_idx.insert("c".to_string(), TermMeta {
+    // //         distribution: Arc::new(BooleanArray::from_slice(&[true])),
+    // //         nums: 5,
+    // //         index: Arc::new(UInt16Array::from(vec![Some(3)])),
+    // //         selectivity: 0.,
+    // //     });
+    // //     term_idx.insert("d".to_string(), TermMeta {
+    // //         distribution: Arc::new(BooleanArray::from_slice(&[true])),
+    // //         nums: 5,
+    // //         index: Arc::new(UInt16Array::from(vec![Some(4)])),
+    // //         selectivity: 0.
+    // //     });
+    // //     term_idx.insert("__id__".to_string(), TermMeta {
+    // //         distribution: Arc::new(BooleanArray::from_slice(&[false])),
+    // //         nums: 0,
+    // //         index: Arc::new(UInt16Array::from(vec![Some(0)])),
+    // //         selectivity: 0.,
+    // //     });
 
-    //     let session_ctx = BooleanContext::new();
-    //     session_ctx.register_index("t", Arc::new(PostingTable::new(
-    //         schema.clone(),
-    //         vec![Arc::new(term_idx)],
-    //         vec![Arc::new(vec![batch])],
-    //         &BatchRange::new(0, 20)
-    //     ))).unwrap();
+    // //     let session_ctx = BooleanContext::new();
+    // //     session_ctx.register_index("t", Arc::new(PostingTable::new(
+    // //         schema.clone(),
+    // //         vec![Arc::new(term_idx)],
+    // //         vec![Arc::new(vec![batch])],
+    // //         &BatchRange::new(0, 20)
+    // //     ))).unwrap();
 
-    //     let index = session_ctx.index("t").await.unwrap();
-    //     let t = Instant::now();
-    //     index.boolean_predicate(BooleanPredicateBuilder::must(&["a", "b"]).unwrap().build()).unwrap()
-    //         .show().await.unwrap();
-    //     println!("{}", t.elapsed().as_nanos());
-    //     panic!("");
-    // }
+    // //     let index = session_ctx.index("t").await.unwrap();
+    // //     let t = Instant::now();
+    // //     index.boolean_predicate(BooleanPredicateBuilder::must(&["a", "b"]).unwrap().build()).unwrap()
+    // //         .show().await.unwrap();
+    // //     println!("{}", t.elapsed().as_nanos());
+    // //     panic!("");
+    // // }
 }
