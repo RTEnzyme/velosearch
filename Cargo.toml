@@ -38,6 +38,7 @@ cranelift = "0.97"
 cranelift-jit = "0.97"
 cranelift-module = "0.97"
 cranelift-native = "0.97"
+lazy_static = "1.4"
 
 [[bench]]
 name = "arrow_bitwise_and"

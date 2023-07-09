@@ -298,29 +298,28 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-
     fn translate_boolean_expr(&mut self, expr: BooleanExpr) -> Result<Value> {
         let mut body_block;
         let else_block = self.builder.create_block();
         self.builder.append_block_param(else_block, U8.native);
         let mut init_v = self.builder.ins().iconst(U8.native, 0xFF);
-        for mut e in expr.cnf.into_iter() {
-            let mut value = match e.remove(0) {
-                Dnf::Normal(v) => self.translate_expr(v).unwrap(),
-                Dnf::Not(v) => {
-                    let v = self.translate_expr(v).unwrap();
-                    self.builder.ins().bnot(v)
-                }
+        let mut cnt = 0;
+        let value_base = self.translate_expr(Expr::Identifier(format!("batch"), I64))?;
+        let offset = self.translate_expr(Expr::Identifier(format!("offset"), I64))?;
+        let cnf_base = self.translate_expr(Expr::Identifier(format!("cnf"), I64)).unwrap();
+        for e in expr.cnf.into_iter() {
+            let v = if e == 1 {
+                let v = self.get_cnf_value(value_base, cnf_base, offset, cnt);
+                cnt += 1;
+                v
+            } else {
+                let v1 = self.get_cnf_value(value_base, cnf_base, offset, cnt);
+                cnt += 1;
+                let v2 = self.get_cnf_value(value_base, cnf_base, offset, cnt);
+                cnt += 1;
+                self.builder.ins().band(v1, v2)
             };
-            if e.len() != 0 {
-                e
-                .into_iter()
-                .for_each(|v| {
-                    value = self.translate_dnf_expr(value, v)
-                })
-            }
-            // let value = self.builder.ins().ireduce(U8.native, value);
-            init_v = self.builder.ins().band(init_v, value);
+            init_v = self.builder.ins().band(init_v, v);
             body_block = self.builder.create_block();
             self.builder.append_block_param(body_block, U8.native);
             self.builder.ins().brif(
@@ -338,6 +337,58 @@ impl<'a> FunctionTranslator<'a> {
         self.builder.seal_block(else_block);
         Ok(self.builder.block_params(else_block)[0])
     }
+
+    #[inline]
+    fn get_cnf_value(&mut self, value_base: Value, cnf_off: Value, offset: Value, cnt: i32) -> Value {
+        let eight = self.builder.ins().iconst(I64.native, 8);
+        let value_off = self.builder.ins().load(I64.native, MemFlags::new(), cnf_off, cnt * 8);
+        let value_off = self.builder.ins().imul(value_off, eight);
+        let value_off = self.builder.ins().iadd(value_base, value_off);
+        let value_ptr = self.builder.ins().load(I64.native, MemFlags::new(), value_off, 0);
+        let offset = self.builder.ins().imul(offset, eight);
+        let ptr = self.builder.ins().iadd(value_ptr, offset);
+        self.builder.ins().load(U8.native, MemFlags::new(), ptr, 0)
+    }
+
+    // fn _translate_boolean_expr(&mut self, expr: BooleanExpr) -> Result<Value> {
+    //     let mut body_block;
+    //     let else_block = self.builder.create_block();
+    //     self.builder.append_block_param(else_block, U8.native);
+    //     let mut init_v = self.builder.ins().iconst(U8.native, 0xFF);
+    //     for mut e in expr.cnf.into_iter() {
+    //         let mut value = match e.remove(0) {
+    //             Dnf::Normal(v) => self.translate_expr(v).unwrap(),
+    //             Dnf::Not(v) => {
+    //                 let v = self.translate_expr(v).unwrap();
+    //                 self.builder.ins().bnot(v)
+    //             }
+    //         };
+    //         if e.len() != 0 {
+    //             e
+    //             .into_iter()
+    //             .for_each(|v| {
+    //                 value = self.translate_dnf_expr(value, v)
+    //             })
+    //         }
+    //         // let value = self.builder.ins().ireduce(U8.native, value);
+    //         init_v = self.builder.ins().band(init_v, value);
+    //         body_block = self.builder.create_block();
+    //         self.builder.append_block_param(body_block, U8.native);
+    //         self.builder.ins().brif(
+    //             init_v,
+    //             body_block,
+    //             &[init_v],
+    //             else_block,
+    //             &[init_v],
+    //         );
+    //         self.builder.switch_to_block(body_block);
+    //         self.builder.seal_block(body_block);
+    //     }
+    //     self.builder.ins().jump(else_block, &[init_v]);
+    //     self.builder.switch_to_block(else_block);
+    //     self.builder.seal_block(else_block);
+    //     Ok(self.builder.block_params(else_block)[0])
+    // }
 
     fn translate_dnf_expr(&mut self, lhs: Value, rhs: Dnf) -> Value {
         match rhs {

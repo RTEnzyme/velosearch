@@ -311,7 +311,7 @@ pub enum Dnf {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BooleanExpr {
-    pub(crate) cnf: Vec<Vec<Dnf>>,
+    pub(crate) cnf: Vec<i64>,
 }
 
 impl BooleanExpr {

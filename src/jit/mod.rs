@@ -3,13 +3,67 @@ pub mod api;
 pub mod compile;
 pub mod jit;
 
+use std::sync::Arc;
+use datafusion::physical_expr::BooleanQueryEvalFunc;
+
 pub use compile::create_boolean_query_fn;
+use lazy_static::lazy_static;
+
+use crate::jit::{api::Assembler, ast::{Expr, BooleanExpr}, compile::build_boolean_query};
+
+pub struct PrecompiledBooleanEval {
+    func: fn(*const *const u8, *const i64, *const u8, i64) -> (),
+}
+
+unsafe impl Send for PrecompiledBooleanEval {}
+
+unsafe impl Sync for PrecompiledBooleanEval {}
+
+const LIMIT_CNT: usize = 6;
+lazy_static!(
+    pub static ref BOOLEAN_EVAL_FUNC: Vec<Arc<PrecompiledBooleanEval>> = {
+        let mut func_vec = Vec::new();
+        let assembler = Assembler::default();
+        let mut cnt: usize = 0;
+        while cnt < LIMIT_CNT {
+            let mut code: usize = 0;
+            while code <= (1 << (cnt + 1)) - 1 {
+                let cnf_vec: Vec<i64> = (0..8).map(|v| {
+                    if (1 << v) & code == 0 {
+                        1
+                    } else {
+                        2
+                    }
+                })
+                .collect();
+                let jit_expr = Expr::BooleanExpr(BooleanExpr {
+                    cnf: cnf_vec,
+                });
+                let gen_func = build_boolean_query(&assembler, jit_expr).unwrap();
+                let mut jit = assembler.create_jit();
+                let gen_func = jit.compile(gen_func).unwrap();
+                let code_fn = unsafe {
+                    core::mem::transmute::<_, fn(*const *const u8, *const i64, *const u8, i64) -> ()>(gen_func)
+                };
+                func_vec.push(Arc::new(PrecompiledBooleanEval { func: code_fn }));
+                code += 1;
+            }
+            cnt += 1;
+        }
+        func_vec
+    };
+);
 
 #[cfg(test)]
 mod test {
     use crate::{utils::Result, jit::{api::Assembler, ast::U16}};
 
-    use super::{jit::JIT, api::GeneratedFunction};
+    use super::{jit::JIT, api::GeneratedFunction, BOOLEAN_EVAL_FUNC};
+
+    #[test]
+    fn global_static_boolean_eval() {
+        println!("{:}",BOOLEAN_EVAL_FUNC.len());
+    }
 
     #[test]
     fn iterative_fib() -> Result<()> {

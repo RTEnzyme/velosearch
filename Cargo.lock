@@ -1263,6 +1263,7 @@ dependencies = [
  "datafusion",
  "failure",
  "futures",
+ "lazy_static",
  "packed_simd_2",
  "parking_lot",
  "rand",
