@@ -150,7 +150,6 @@ impl BooleanPhysicalPlanner {
                                 .enumerate()
                                 .map(|(i, s)| (s, i as i64))
                                 .collect(); 
-                            debug!("term2idx: {:?}", term2idx);
                             let mut cnf_predicates = CnfPredicate::new(
                                 &predicate,
                                 term2idx,
@@ -378,7 +377,6 @@ fn create_physical_expr(
                 Operator::BitwiseOr => Operator::Or,
                 _ => unreachable!(),
             };
-            println!("op: {op}");
             binary(lhs, op, rhs, input_schema)
         }
         Expr::Not(expr) => expressions::not(create_physical_expr(

@@ -173,7 +173,6 @@ mod test {
         // compile and run JIT code
         let assembler = Assembler::default();
         let gen_func = build_boolean_query(&assembler, jit_expr).unwrap();
-        println!("{}", gen_func);
 
         let mut jit = assembler.create_jit();
         let gen_func = jit.compile(gen_func).unwrap();
