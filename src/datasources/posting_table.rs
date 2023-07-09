@@ -5,7 +5,7 @@ use datafusion::{
     arrow::{datatypes::{SchemaRef, Schema, Field, DataType}, record_batch::RecordBatch, array::{BooleanArray, UInt16Array}, compute::filter}, 
     datasource::TableProvider, 
     logical_expr::TableType, execution::context::SessionState, prelude::Expr, error::{Result, DataFusionError}, 
-    physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream, metrics::{ExecutionPlanMetricsSet, BaselineMetrics, MetricsSet}}, common::TermMeta};
+    physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream, metrics::{ExecutionPlanMetricsSet, MetricsSet}}, common::TermMeta};
 use futures::{Stream, future::BoxFuture};
 use adaptive_hybrid_trie::TermIdx;
 use tracing::debug;
@@ -157,10 +157,8 @@ impl ExecutionPlan for PostingExec {
         Ok(Box::pin(PostingStream::try_new(
             self.partitions[partition].clone(),
             self.projected_schema.clone(),
-            self.projection.clone(),
             self.partition_min_range.as_ref().unwrap()[partition].clone(),
             self.term_idx[partition].clone(),
-            BaselineMetrics::new(&self.metric, partition),
         )?))
     }
 
@@ -236,12 +234,6 @@ pub struct PostingStream {
     data_future: BoxFuture<'static, Vec<RecordBatch>>,
     /// Schema representing the data
     schema: SchemaRef,
-    /// Optional projection for which columns to load
-    projection: Option<Vec<usize>>,
-    /// TermIdx
-    term_idx: Arc<TermIdx<TermMeta>>,
-    /// metric
-    metric: BaselineMetrics,
     /// data len
     data_len: usize,
     /// data
@@ -253,10 +245,8 @@ impl PostingStream {
     pub fn try_new(
         data: Arc<Vec<PostingBatch>>,
         schema: SchemaRef,
-        projection: Option<Vec<usize>>,
         min_range: Arc<BooleanArray>,
         term_idx: Arc<TermIdx<TermMeta>>,
-        metric: BaselineMetrics,
     ) -> Result<Self> {
         debug!("Try new a PostingStream");
         let valid_cnt = min_range.true_count();
@@ -299,9 +289,6 @@ impl PostingStream {
         Ok(Self {
             data_future: Box::pin(valid_data),
             schema,
-            projection,
-            term_idx,
-            metric,
             data_len,
             data: None,
         })
@@ -353,17 +340,13 @@ pub fn make_posting_schema(fields: Vec<&str>) -> Schema {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
     use datafusion::{
         prelude::SessionContext, 
         arrow::array::{UInt16Array, UInt32Array}, 
         from_slice::FromSlice, common::cast::as_uint32_array, 
-        physical_plan::{expressions::col, PhysicalExpr, common::collect, boolean::BooleanExec}
     };
     use futures::StreamExt;
-    use datafusion::physical_expr::expressions::boolean_query;
-    use tracing::{Level, debug};
 
     use super::*;
 

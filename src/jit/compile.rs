@@ -6,11 +6,10 @@ use std::sync::Arc;
 use datafusion::physical_plan::expressions::Dnf as DDnf;
 use datafusion::physical_expr::BooleanQueryEvalFunc;
 
-use crate::jit::ast::{Literal, TypedLit};
 use crate::utils::Result;
 use super::BOOLEAN_EVAL_FUNC;
 use super::api::Assembler;
-use super::ast::{JITType, Dnf, U8, BooleanExpr};
+use super::ast::JITType;
 use super::{
     api::GeneratedFunction,
     ast::{Expr as JITExpr, I64, PTR_SIZE},
@@ -155,9 +154,9 @@ pub fn build_boolean_query(
 mod test {
     use tracing::Level;
 
-    use crate::jit::{ast::{Expr, BooleanExpr, Dnf, U8}, api::Assembler};
+    use crate::jit::{ast::{Expr, BooleanExpr}, api::Assembler};
 
-    use super::{build_calc_fn, build_boolean_query};
+    use super::build_boolean_query;
 
     #[test]
     fn boolean_query_simple() {
@@ -191,53 +190,6 @@ mod test {
             core::mem::transmute::<_, fn(*const *const u8, *const i64, *const u8, i64) -> ()>(gen_func)
         };
         code_fn(input.as_ptr(), cnf.as_ptr(), result.as_ptr(), 2);
-        println!("res: {:?}", result);
+        assert_eq!(result, vec![0x01, 0]);
     }
-
-    // #[test]
-    // fn array_add() {
-    //     let jit_expr = Expr::BooleanExpr(BooleanExpr {
-    //         cnf: vec![
-    //             vec![Dnf::Normal(Expr::Identifier("test".to_string(), U8))],
-    //             vec![
-    //                 Dnf::Normal(Expr::Identifier("test2".to_string(), U8)),
-    //                 Dnf::Normal(Expr::Identifier("test3".to_string(), U8))
-    //             ],
-    //         ],
-    //     });
-    //     // allocate memory for calc result
-    //     let result: Vec<u8> = vec![0x0; 2];
-
-    //     // compile and run JIT code
-    //     let assembler = Assembler::default();
-    //     let input_fields = vec![
-    //         ("test".to_string(), U8),
-    //         ("test2".to_string(), U8),
-    //         ("test3".to_string(), U8),
-    //     ];
-    //     let gen_func = build_calc_fn(&assembler, jit_expr, input_fields, U8).unwrap();
-    //     println!("{}", &gen_func);
-    //     let mut jit = assembler.create_jit();
-    //     let code_ptr = jit.compile(gen_func).unwrap();
-    //     let code_fn = unsafe {
-    //         core::mem::transmute::<_, fn(*const *const u8, *const u8, i64) -> ()>(
-    //             code_ptr,
-    //         )
-    //     };
-    //     let test = vec![0x11, 0x01];
-    //     let test2 = vec![0x01, 0x01];
-    //     let test3 = vec![0x10, 0xFF];
-    //     let values = vec![
-    //         test.as_ptr(),
-    //         test2.as_ptr(),
-    //         test3.as_ptr(),
-    //     ];
-    //     println!("{:?}", values);
-    //     code_fn(
-    //         values.as_ptr(),
-    //         result.as_ptr(),
-    //         2,
-    //     );
-    //     assert_eq!(result, vec![17, 1]);
-    // }
 }

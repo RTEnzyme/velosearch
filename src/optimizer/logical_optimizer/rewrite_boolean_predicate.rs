@@ -20,7 +20,7 @@ use std::cmp::max;
 use datafusion::{
     optimizer::{OptimizerRule, OptimizerConfig, optimizer::ApplyOrder},
     logical_expr::{LogicalPlan, logical_plan::Boolean, BooleanQuery, Operator},
-    common::{Result}, prelude::Expr, error::DataFusionError,
+    prelude::Expr, error::DataFusionError, common::Result,
 };
 
 
@@ -164,10 +164,6 @@ enum Predicate {
     And { args: Vec<Predicate> },
     Or { args: Vec<Predicate> },
     Other { expr: Box<Expr> },
-}
-
-fn calcu_stats(exp: &Expr) {
-
 }
 
 fn predicate(expr: &Expr, (expr_cnt, op_cnt): (&mut usize, &mut usize)) -> Result<Predicate> {

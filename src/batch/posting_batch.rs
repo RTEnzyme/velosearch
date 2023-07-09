@@ -1,7 +1,6 @@
 use std::{sync::{Arc, RwLock}, ops::Index, collections::{HashMap, BTreeMap}, cmp::max, mem::size_of_val};
 
 use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array}, record_batch::RecordBatch}, from_slice::FromSlice, common::TermMeta};
-use adaptive_hybrid_trie::TermIdx;
 use crate::utils::{Result, FastErr};
 
 /// 
@@ -31,7 +30,6 @@ impl BatchRange {
 }
 
 pub type PostingList = Arc<UInt16Array>;
-pub type PostingMask = Arc<UInt32Array>;
 pub type TermSchemaRef = SchemaRef;
 
 /// A batch of Postinglist which contain serveral terms,

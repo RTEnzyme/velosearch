@@ -8,12 +8,11 @@ use datafusion::{
         explain::ExplainExec, projection::ProjectionExec, boolean::BooleanExec, displayable, analyze::AnalyzeExec}, 
         execution::context::SessionState, error::{Result, DataFusionError}, 
         logical_expr::{
-            LogicalPlan, expr::BooleanQuery, BinaryExpr, PlanType, ToStringifiedPlan, Projection, TableScan, expr_rewriter::unnormalize_cols, StringifiedPlan, Operator
+            LogicalPlan, expr::BooleanQuery, BinaryExpr, PlanType, ToStringifiedPlan, Projection, TableScan, StringifiedPlan, Operator
         },
         physical_expr::{boolean_query, boolean_query_with_cnf},
         common::DFSchema, arrow::datatypes::{Schema, SchemaRef}, 
         prelude::Expr, physical_expr::execution_props::ExecutionProps, datasource::source_as_provider, 
-        optimizer::utils::unalias, 
         physical_optimizer::PhysicalOptimizerRule
     };
 use futures::{future::BoxFuture, FutureExt};
@@ -152,9 +151,6 @@ impl BooleanPhysicalPlanner {
                         } else {
                             let mut cnf_predicates = CnfPredicate::new(
                                 &predicate,
-                                input_dfschema,
-                                &input_schema,
-                                session_state.execution_props(),
                             );
                             cnf_predicates.flatten_cnf_predicate();
                             let cnf_predicates = cnf_predicates.collect();
@@ -440,20 +436,15 @@ struct CnfPredicate<'a> {
     root: &'a BooleanQuery,
     predicates: Vec<Vec<String>>,
     idx: usize,
-    input_dfschema: &'a DFSchema,
-    input_schema: &'a Schema,
-    execution_props: &'a ExecutionProps,
+
 }
 
 impl<'a> CnfPredicate<'a> {
-    fn new(root: &'a BooleanQuery, input_dfschema: &'a DFSchema, input_schema: &'a Schema, execution_props: &'a ExecutionProps) -> Self {
+    fn new(root: &'a BooleanQuery) -> Self {
         Self {
             root,
             predicates: Vec::new(),
             idx: 0,
-            input_dfschema,
-            input_schema,
-            execution_props,
         }
     }
 
@@ -495,9 +486,9 @@ impl<'a> CnfPredicate<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::{unreachable, println, assert_eq, collections::HashMap};
+    use std::{unreachable, println, assert_eq};
 
-    use datafusion::{prelude::{col, boolean_or, boolean_and, Expr}, common::{DFSchema, DFField}, arrow::datatypes::{Schema, Field, DataType}, physical_expr::execution_props::ExecutionProps, physical_plan::expressions::Column};
+    use datafusion::prelude::{col, boolean_or, boolean_and, Expr};
 
     use super::CnfPredicate;
 
@@ -509,27 +500,8 @@ mod tests {
         let a_b = boolean_or(a, b);
         let a_b_c = boolean_and(a_b, c);
         if let Expr::BooleanQuery(boolean) = a_b_c {
-            let input_dfschema = DFSchema::new_with_metadata(
-                vec![
-                    DFField::new(None, "a", DataType::Boolean, false),
-                    DFField::new(None, "b", DataType::Boolean, false),
-                    DFField::new(None, "c", DataType::Boolean, false),
-                ],
-                HashMap::new(),
-            ).unwrap();
-            let input_schema = Schema::new(
-                vec![
-                    Field::new("a", DataType::Boolean, false),
-                    Field::new("b", DataType::Boolean, false),
-                    Field::new("c", DataType::Boolean, false),
-                ]
-            );
-            let execution_props = ExecutionProps::new();
             let mut cnf = CnfPredicate::new(
                 &boolean,
-                &input_dfschema,
-                &input_schema,
-                &execution_props,
             );
             cnf.flatten_cnf_predicate();
             let cnf_list = cnf.collect();

@@ -1,10 +1,9 @@
 use super::api::GeneratedFunction;
-use super::ast::{U8, U16, BinaryExpr, Expr, JITType, Literal, Stmt, TypedLit, BOOL, NIL, BooleanExpr, Dnf, I64};
+use super::ast::{U8, U16, BinaryExpr, Expr, JITType, Literal, Stmt, TypedLit, BOOL, NIL, BooleanExpr, I64};
 use crate::utils::{Result, FastErr};
 use cranelift::prelude::*;
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{Linkage, Module};
-use tracing::debug;
 use std::collections::HashMap;
 
 /// The basic JIT class
@@ -348,63 +347,6 @@ impl<'a> FunctionTranslator<'a> {
         let offset = self.builder.ins().imul(offset, eight);
         let ptr = self.builder.ins().iadd(value_ptr, offset);
         self.builder.ins().load(U8.native, MemFlags::new(), ptr, 0)
-    }
-
-    // fn _translate_boolean_expr(&mut self, expr: BooleanExpr) -> Result<Value> {
-    //     let mut body_block;
-    //     let else_block = self.builder.create_block();
-    //     self.builder.append_block_param(else_block, U8.native);
-    //     let mut init_v = self.builder.ins().iconst(U8.native, 0xFF);
-    //     for mut e in expr.cnf.into_iter() {
-    //         let mut value = match e.remove(0) {
-    //             Dnf::Normal(v) => self.translate_expr(v).unwrap(),
-    //             Dnf::Not(v) => {
-    //                 let v = self.translate_expr(v).unwrap();
-    //                 self.builder.ins().bnot(v)
-    //             }
-    //         };
-    //         if e.len() != 0 {
-    //             e
-    //             .into_iter()
-    //             .for_each(|v| {
-    //                 value = self.translate_dnf_expr(value, v)
-    //             })
-    //         }
-    //         // let value = self.builder.ins().ireduce(U8.native, value);
-    //         init_v = self.builder.ins().band(init_v, value);
-    //         body_block = self.builder.create_block();
-    //         self.builder.append_block_param(body_block, U8.native);
-    //         self.builder.ins().brif(
-    //             init_v,
-    //             body_block,
-    //             &[init_v],
-    //             else_block,
-    //             &[init_v],
-    //         );
-    //         self.builder.switch_to_block(body_block);
-    //         self.builder.seal_block(body_block);
-    //     }
-    //     self.builder.ins().jump(else_block, &[init_v]);
-    //     self.builder.switch_to_block(else_block);
-    //     self.builder.seal_block(else_block);
-    //     Ok(self.builder.block_params(else_block)[0])
-    // }
-
-    fn translate_dnf_expr(&mut self, lhs: Value, rhs: Dnf) -> Value {
-        match rhs {
-            Dnf::Not(rhs) => {
-                let rhs = self.translate_expr(rhs).unwrap();
-                self.translate_bitwise_or(lhs, rhs)
-            }
-            Dnf::Normal(rhs) => {
-                let rhs = self.translate_expr(rhs).unwrap();
-                self.translate_bitwise_or(lhs, rhs)
-            }
-        }
-    }
-
-    fn translate_bitwise_or(&mut self, lhs: Value, rhs: Value) -> Value {
-        self.builder.ins().bor(lhs, rhs)
     }
 
     fn translate_binary_expr(&mut self, expr: BinaryExpr) -> Result<Value> {

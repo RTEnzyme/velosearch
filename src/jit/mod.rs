@@ -4,7 +4,6 @@ pub mod compile;
 pub mod jit;
 
 use std::sync::Arc;
-use datafusion::physical_expr::BooleanQueryEvalFunc;
 
 pub use compile::create_boolean_query_fn;
 use lazy_static::lazy_static;
