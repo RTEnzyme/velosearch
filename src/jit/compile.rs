@@ -2,6 +2,7 @@
 
 use datafusion::physical_plan::expressions::Dnf as DDnf;
 
+use crate::jit::ast::{Literal, TypedLit};
 use crate::utils::Result;
 use super::api::Assembler;
 use super::ast::{JITType, Dnf, U8, BooleanExpr};
@@ -17,9 +18,9 @@ pub fn create_boolean_query_fn(
     let assembler = Assembler::default();
     let cnf = cnf.into_iter()
         .map(|v| {
-            v.into_iter()
+            v.iter()
             .map(|d| {
-                Dnf::Normal(JITExpr::Identifier(d, U8))
+                Dnf::Normal(JITExpr::Identifier(d.clone(), U8))
             })
             .collect()
         })
@@ -101,6 +102,47 @@ pub fn build_calc_fn(
             w.declare_as("res", jit_expr.clone())?;
             w.store(w.id("res")?, w.id("res_ptr")?)?;
             w.assign("index", w.add(w.id("index")?, w.lit_i64(1))?)?;
+            Ok(())
+        },
+    )?;
+
+    let gen_func = fn_body.build();
+    Ok(gen_func)
+}
+
+fn build_boolean_query(
+    assembler: &Assembler,
+    jit_expr: JITExpr,
+    cnf_nums: Vec<i64>,
+    inputs: Vec<(String, JITType)>,
+) -> Result<GeneratedFunction> {
+    // Alias pointer type.
+    // The raw pointer `R64` or `R32` is not compatible with integers
+    const PTR_TYPE: JITType = I64;
+
+    let builder = assembler.new_func_builder("eval_fn");
+    // Declare in-param.
+    // Each input takes one position, following by a pointer to place result,
+    // and the last is the lenght of inputs/output arrays.
+    let mut builder = builder
+        .param("batch", PTR_TYPE)
+        .param("cnf", PTR_TYPE)  // Run-Time cnf predicate
+        .param("result", PTR_TYPE)
+        .param("len", I64);
+
+    // Start build function body.
+    // It's loop that calculates the result one by one
+    let mut fn_body = builder.enter_block();
+    fn_body.declare_as("p_idx", fn_body.lit_i64(0))?;
+    fn_body.declare_as("index", fn_body.lit_i64(0))?;
+    fn_body.while_block(
+        |cond| cond.lt(cond.id("index")?, cond.id("len")?),
+        |b| {
+            b.declare_as("offset", b.mul(b.id("index")?, b.lit_i64(1))?)?;
+            b.declare_as("res_ptr", b.add(b.id("result")?, b.id("offset")?)?)?;
+            b.declare_as("res", jit_expr.clone())?;
+            b.store(b.id("res")?, b.id("res_ptr")?)?;
+            b.assign("index", b.add(b.id("index")?, b.lit_i64(1))?)?;
             Ok(())
         },
     )?;

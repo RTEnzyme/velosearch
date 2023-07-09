@@ -80,7 +80,7 @@ impl JIT {
         flag_builder.set("is_pic", "false").unwrap();
 
         flag_builder.set("opt_level", "speed").unwrap();
-        flag_builder.set("enable_simd", "true").unwrap();
+        // flag_builder.set("enable_simd", "true").unwrap();
         let isa_builder = cranelift_native::builder().unwrap_or_else(|msg| {
             panic!("host machine is not supported: {msg}");
         });
@@ -231,7 +231,6 @@ impl JIT {
         }
 
         // Tell the builder we're done with this function.
-        debug!("{:?}",trans.builder.func);
         trans.builder.finalize();
         Ok(())
     }
@@ -298,6 +297,7 @@ impl<'a> FunctionTranslator<'a> {
             Literal::Typed(lt) => Ok(self.translate_typed_lit(lt)),
         }
     }
+
 
     fn translate_boolean_expr(&mut self, expr: BooleanExpr) -> Result<Value> {
         let mut body_block;

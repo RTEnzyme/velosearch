@@ -25,28 +25,12 @@ impl PhysicalOptimizerRule for IntersectionSelection {
         _config: &datafusion::config::ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(boolean) = plan.as_any().downcast_ref::<BooleanExec>() {
-            let inputs = boolean.schema().fields().into_iter().map(|f| f.name().as_str()).collect();
-            let predicates: HashMap<usize, Arc<dyn PhysicalExpr>> = boolean
-                .predicate
-                .into_iter()
-                .map(|(i, p)| {
-                    if let Some(expr) = p.as_any().downcast_ref::<BooleanQueryExpr>() {
-                        if let Some(ref cnf) = expr.cnf_predicates {
-                            if cnf[0].selectivity() < 0.05  {
-                                let gen_fn = create_boolean_query_fn(
-                                    cnf,
-                                    inputs,
-                                );
-                                return (i, Arc::new(BooleanQueryExpr::new_with_fn(expr.predicate_tree, gen_fn)) as Arc<dyn PhysicalExpr>);
-                            }
-                        }
-                    }
-                    (i, p)
-                })
-                .collect();
+            let inputs_schema = boolean.schema();
+            let inputs =inputs_schema.fields().into_iter().map(|f| f.name().as_str()).collect();
+            
             plan.transform_up(&|p| {
                 if let Some(posting) = p.as_any().downcast_ref::<PostingExec>() {
-                    let mut input = (*posting).clone();
+                    let input = (*posting).clone();
                     Ok(Some(Arc::new(
                         PostingExec::try_new(
                             input.partitions.to_owned(),
@@ -57,6 +41,24 @@ impl PhysicalOptimizerRule for IntersectionSelection {
                         )?
                     )))
                 } else if let Some(boolean) = p.as_any().downcast_ref::<BooleanExec>() {
+                    let predicates: HashMap<usize, Arc<dyn PhysicalExpr>> = boolean
+                    .predicate
+                    .iter()
+                    .map(|(i, p)| {
+                        if let Some(expr) = p.as_any().downcast_ref::<BooleanQueryExpr>() {
+                            if let Some(ref cnf) = expr.cnf_predicates {
+                                if cnf[0].selectivity() < 0.05  {
+                                    let gen_fn = create_boolean_query_fn(
+                                        cnf,
+                                        &inputs,
+                                    );
+                                    return (*i, Arc::new(BooleanQueryExpr::new_with_fn(expr.predicate_tree.clone(), gen_fn)) as Arc<dyn PhysicalExpr>);
+                                }
+                            }
+                        }
+                        (*i, p.clone())
+                    })
+                    .collect();
                     Ok(Some(Arc::new(
                         BooleanExec::try_new(
                             predicates,
