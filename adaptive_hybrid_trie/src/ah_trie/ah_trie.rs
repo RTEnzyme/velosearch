@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dashmap::DashMap;
 use fst_rs::FST;
-use tokio::{runtime::{Runtime, Handle}, sync::RwLock};
+use tokio::sync::RwLock;
 use std::sync::Arc;
 use tracing::debug;
 
@@ -68,7 +68,6 @@ impl<T: Clone+Send+Sync> AHTrie<T> {
         if self.is_sample() {
             self.trace(key);
         }
-        debug!("get key: {:}", key);
         futures::executor::block_on(async {
             self.inner.as_ref().read().await.get(key).cloned()
         })
@@ -142,7 +141,6 @@ impl<T: Clone+Send+Sync> AHTrie<T> {
                 inner_write_guard.remove(&key[..matched_length]);
                 fst.iter()
                     .for_each(|(k, v)| {
-                        println!("insert k: {:?}", k);
                         inner_write_guard.insert_bytes(&[key[..matched_length].as_bytes(), &k].concat(), ChildNode::Offset(v as usize));
                     })
             }

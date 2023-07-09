@@ -174,7 +174,7 @@ impl BooleanContext {
 fn optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Sync + Send>> {
     vec![
         // Arc::new(SimplifyExpressions::new()),
-        Arc::new(RewriteBooleanPredicate::new()),
+        // Arc::new(RewriteBooleanPredicate::new()),
         // Arc::new(SimplifyExpressions::new()),
         // Arc::new(EliminateFilter::new()),
         // Arc::new(PushDownFilter::new()),
