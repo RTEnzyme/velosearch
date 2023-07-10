@@ -143,6 +143,7 @@ impl BooleanPhysicalPlanner {
                         if boolean.height > 5 {
                             boolean_query(binary_expr, &input_schema)
                         } else {
+                            debug!("Using code_gen");
                             let schema = boolean.input.schema();
                             let inputs: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
                             let term2idx: HashMap<&str, i64> = inputs

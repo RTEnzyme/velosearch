@@ -44,7 +44,7 @@ impl PhysicalOptimizerRule for IntersectionSelection {
                     .map(|(i, p)| {
                         if let Some(expr) = p.as_any().downcast_ref::<BooleanQueryExpr>() {
                             if let Some(ref cnf) = expr.cnf_predicates {
-                                if cnf[0].selectivity() < 0.05  {
+                                if cnf[0].selectivity() < 2.05  {
                                     let gen_fn = create_boolean_query_fn(
                                         cnf,
                                     );

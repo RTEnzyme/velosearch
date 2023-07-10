@@ -31,12 +31,6 @@ impl PhysicalOptimizerRule for PartitionPredicateReorder {
                 Some(stats) => {
                     let predicate = boolean.predicate[&0].clone();
                     let predicate = predicate.as_any().downcast_ref::<BooleanQueryExpr>().expect("Predicate should be BooleanQueryExpr");
-                    let schema = boolean.input().schema();
-                    let term2idx: HashMap<&str, usize> =  schema
-                        .fields().iter()
-                        .enumerate()
-                        .map(|(i, f)| (f.name().as_str(), i))
-                        .collect();
                     if let Some(ref cnf) = predicate.cnf_predicates {
                         let reorder_predicate: HashMap<usize, Arc<dyn PhysicalExpr>> = stats
                         .iter()

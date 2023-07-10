@@ -27,7 +27,7 @@ lazy_static!(
         while cnt < LIMIT_CNT {
             let mut code: usize = 0;
             while code <= (1 << (cnt + 1)) - 1 {
-                let cnf_vec: Vec<i64> = (0..8).map(|v| {
+                let cnf_vec: Vec<i64> = (0..(cnt + 1)).map(|v| {
                     if (1 << v) & code == 0 {
                         1
                     } else {
@@ -55,13 +55,42 @@ lazy_static!(
 
 #[cfg(test)]
 mod test {
-    use crate::{utils::Result, jit::{api::Assembler, ast::U16}};
+    use std::sync::Arc;
 
-    use super::{jit::JIT, api::GeneratedFunction, BOOLEAN_EVAL_FUNC};
+    use datafusion::{arrow::{array::BooleanArray, datatypes::{Schema, DataType, Field}, record_batch::RecordBatch}, physical_plan::expressions::Dnf};
+
+    use crate::{utils::Result, jit::{api::Assembler, ast::U16, create_boolean_query_fn}};
+
+    use super::{jit::JIT, api::GeneratedFunction};
 
     #[test]
     fn global_static_boolean_eval() {
-        println!("{:}",BOOLEAN_EVAL_FUNC.len());
+        let schema = Schema::new(
+            vec![
+                Field::new(format!("test1"), DataType::Boolean, false),
+                Field::new(format!("test2"), DataType::Boolean, false),
+                Field::new(format!("test3"), DataType::Boolean, false),
+                Field::new(format!("test4"), DataType::Boolean, false),
+            ],
+        );
+        let cnf = vec![
+            Dnf::new(vec![0,]),
+            Dnf::new(vec![1, 2]),
+            Dnf::new(vec![3]),
+        ];
+        let test1 = Arc::new(BooleanArray::from(vec![true, false, true, false, false ,true, true, false]));
+        let test2 = Arc::new(BooleanArray::from(vec![false, true, true, false, false, true, true, false]));
+        let test3 = Arc::new(BooleanArray::from(vec![false, false, true, true, false, false, true ,false])); 
+        let test4 = Arc::new(BooleanArray::from(vec![true, false, false, false, true, false, true, false]));
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![test1, test2, test3, test4],
+        ).unwrap();
+
+
+        // compile and run JIT code
+        let gen_func = create_boolean_query_fn(&cnf);
+        gen_func.eval(&batch);
     }
 
     #[test]
