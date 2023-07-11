@@ -79,6 +79,7 @@ impl JIT {
         flag_builder.set("is_pic", "false").unwrap();
 
         flag_builder.set("opt_level", "speed").unwrap();
+        flag_builder.set("enable_simd", "false").unwrap();
         // flag_builder.set("enable_simd", "true").unwrap();
         let isa_builder = cranelift_native::builder().unwrap_or_else(|msg| {
             panic!("host machine is not supported: {msg}");
@@ -302,21 +303,17 @@ impl<'a> FunctionTranslator<'a> {
         let else_block = self.builder.create_block();
         self.builder.append_block_param(else_block, U8.native);
         let mut init_v = self.builder.ins().iconst(U8.native, 0xFF);
-        let mut cnt = 0;
         let value_base = self.translate_expr(Expr::Identifier(format!("batch"), I64))?;
         let offset = self.translate_expr(Expr::Identifier(format!("offset"), I64))?;
-        let cnf_base = self.translate_expr(Expr::Identifier(format!("cnf"), I64)).unwrap();
-        for e in expr.cnf.into_iter() {
+        let offset = self.builder.ins().imul_imm(offset, 8);
+        for (i, e) in expr.cnf.into_iter().enumerate() {
             let v = if e == 1 {
-                let v = self.get_cnf_value(value_base, cnf_base, offset, cnt);
-                cnt += 1;
+                let v = self.get_cnf_value(i, 1, offset, value_base);
                 v
             } else {
-                let v1 = self.get_cnf_value(value_base, cnf_base, offset, cnt);
-                cnt += 1;
-                let v2 = self.get_cnf_value(value_base, cnf_base, offset, cnt);
-                cnt += 1;
-                self.builder.ins().band(v1, v2)
+                let v1 = self.get_cnf_value(i, 1, offset, value_base);
+                let v2 = self.get_cnf_value(i, 2, offset, value_base);
+                self.builder.ins().bor(v1, v2)
             };
             init_v = self.builder.ins().band(init_v, v);
             body_block = self.builder.create_block();
@@ -338,15 +335,25 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     #[inline]
-    fn get_cnf_value(&mut self, value_base: Value, cnf_off: Value, offset: Value, cnt: i32) -> Value {
+    fn get_cnf_value(&mut self, num: usize, dnf_size: usize, offset: Value, value_base: Value) -> Value {
+        let v = self.translate_expr(Expr::Identifier(format!("p{num}_{dnf_size}"), I64)).unwrap();
+        let value_off = self.builder.ins().imul_imm(v, 8);
+        let value_off = self.builder.ins().iadd(value_base, value_off);
+        let value_ptr = self.builder.ins().load(I64.native, MemFlags::new().with_readonly(), value_off, 0);
+        let ptr = self.builder.ins().iadd(value_ptr, offset);
+        self.builder.ins().load(U8.native, MemFlags::new().with_readonly(), ptr, 0)
+    }
+
+    #[inline]
+    fn _get_cnf_value(&mut self, value_base: Value, cnf_off: Value, offset: Value, cnt: i32) -> Value {
         let eight = self.builder.ins().iconst(I64.native, 8);
-        let value_off = self.builder.ins().load(I64.native, MemFlags::new(), cnf_off, cnt * 8);
+        let value_off = self.builder.ins().load(I64.native, MemFlags::new().with_readonly(), cnf_off, cnt * 8);
         let value_off = self.builder.ins().imul(value_off, eight);
         let value_off = self.builder.ins().iadd(value_base, value_off);
-        let value_ptr = self.builder.ins().load(I64.native, MemFlags::new(), value_off, 0);
+        let value_ptr = self.builder.ins().load(I64.native, MemFlags::new().with_readonly(), value_off, 0);
         let offset = self.builder.ins().imul(offset, eight);
         let ptr = self.builder.ins().iadd(value_ptr, offset);
-        self.builder.ins().load(U8.native, MemFlags::new(), ptr, 0)
+        self.builder.ins().load(U8.native, MemFlags::new().with_readonly(), ptr, 0)
     }
 
     fn translate_binary_expr(&mut self, expr: BinaryExpr) -> Result<Value> {
@@ -504,7 +511,7 @@ impl<'a> FunctionTranslator<'a> {
 
     fn translate_deref(&mut self, ptr: Expr, ty: JITType) -> Result<Value> {
         let ptr = self.translate_expr(ptr)?;
-        Ok(self.builder.ins().load(ty.native, MemFlags::new(), ptr, 0))
+        Ok(self.builder.ins().load(ty.native, MemFlags::new().with_readonly(), ptr, 0))
     }
 
     fn translate_store(&mut self, ptr: Expr, value: Expr) -> Result<()> {

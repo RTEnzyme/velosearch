@@ -122,17 +122,35 @@ pub fn build_boolean_query(
     // Start build function body.
     // It's loop that calculates the result one by one
     let mut fn_body = builder.enter_block();
+    let cnf_nums = if let JITExpr::BooleanExpr(ref bool) = jit_expr {
+        &bool.cnf
+    } else {
+        unreachable!()
+    };
+    let mut cur = 0;
+    let mut cnf = Vec::new();
+    for i in cnf_nums {
+        cnf.push((i, cur));
+        cur += *i;
+    }
+    for (i, n) in cnf.into_iter().enumerate() {
+        let offset = fn_body.add(fn_body.id("cnf")?, fn_body.lit_i64(8 * n.1))?;
+        fn_body.declare_as(format!("p{i}_1").as_str(), fn_body.load(offset, I64)?)?;
+        if *n.0 == 2 {
+            let offset = fn_body.add(fn_body.id("cnf")?, fn_body.lit_i64(8 * n.1 + 8))?;
+            fn_body.declare_as(format!("p{i}_2").as_str(), fn_body.load(offset, I64)?)?;
+        }
+    }
     fn_body.declare_as("index", fn_body.lit_i64(0))?;
     fn_body.while_block(
         |cond| cond.lt(cond.id("index")?, cond.id("len")?),
         |b| {
             b.declare_as("offset", b.id("index")?)?;
             b.declare_as("res_ptr", b.add(b.id("result")?, b.id("offset")?)?)?;
-
-        
             b.declare_as("res", jit_expr.clone())?;
             b.store(b.id("res")?, b.id("res_ptr")?)?;
             b.assign("index", b.add(b.id("index")?, b.lit_i64(1))?)?;
+
             Ok(())
         },
     )?;

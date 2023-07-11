@@ -2,13 +2,13 @@
 use std::sync::Arc;
 
 use criterion::{Criterion, BenchmarkId, criterion_group, criterion_main, BatchSize};
-use fastfull_search::jit::create_boolean_query_fn;
+use fastfull_search::jit::{create_boolean_query_fn, BOOLEAN_EVAL_FUNC};
 use rand::seq::IteratorRandom;
 use datafusion::{arrow::{array::BooleanArray, record_batch::RecordBatch, datatypes::{Schema, Field, DataType}}, physical_expr::BooleanQueryExpr, physical_plan::{expressions::{binary, col, Dnf}, PhysicalExpr}, logical_expr::Operator};
 
 #[inline]
 fn gen_batch(sel: f64) -> RecordBatch {
-    let num = 4096;
+    let num = 1024;
     let v: Vec<u32> = (0..num as u32).collect();
     let mut rng = rand::thread_rng();
     let input_schema = Schema::new(
@@ -62,7 +62,7 @@ fn gen_batch(sel: f64) -> RecordBatch {
 fn vectorized_codegen(c: &mut Criterion) {
     println!("start");
     let mut group = c.benchmark_group("vectorized_vs_codegen");
-
+    let _ = BOOLEAN_EVAL_FUNC[0].clone();
     let input_schema = Schema::new(
         vec![
             Field::new(format!("test1"), DataType::Boolean, false),
@@ -72,22 +72,25 @@ fn vectorized_codegen(c: &mut Criterion) {
             Field::new(format!("test5"), DataType::Boolean, false),
         ],
     );
-    let binary_expr = binary(col("test1", &input_schema).unwrap(), Operator::Or, col("test2", &input_schema).unwrap(), &input_schema).unwrap();
+    // let binary_expr = binary(col("test1", &input_schema).unwrap(), Operator::And, col("test2", &input_schema).unwrap(), &input_schema).unwrap();
+    // let binary_expr2 = binary(col("test4", &input_schema).unwrap(), Operator::And, col("test3", &input_schema).unwrap(), &input_schema).unwrap();
+    let binary_expr = binary(col("test1", &input_schema).unwrap(), Operator::And, col("test2", &input_schema).unwrap(), &input_schema).unwrap();
     let binary_expr = binary(binary_expr, Operator::And, col("test3", &input_schema).unwrap(), &input_schema).unwrap();
     let binary_expr = binary(binary_expr, Operator::And, col("test4", &input_schema).unwrap(), &input_schema).unwrap();
     let binary_expr = binary(binary_expr, Operator::And, col("test5", &input_schema).unwrap(), &input_schema).unwrap();
 
     let gen_func = create_boolean_query_fn(&vec![
-        Dnf::new(vec![3,]),
-        Dnf::new(vec![4,]),
-        Dnf::new(vec![2,]),
-        Dnf::new(vec![0, 1]),
+        Dnf::new(vec![0]),
+        Dnf::new(vec![1]),
+        Dnf::new(vec![2]),
+        Dnf::new(vec![3]),
+        Dnf::new(vec![4]),
     ]);
     let vectorized_expr = BooleanQueryExpr::new(binary_expr.clone());
     let codegen_expr = BooleanQueryExpr::new_with_fn(binary_expr, gen_func);
 
-    for i in 1..=25 {
-        let sel = i as f64 * 0.01;
+    for i in 1..=50 {
+        let sel = i as f64 * 0.02;
         let datas: Vec<RecordBatch> = (0..1000).map(|_| gen_batch(sel)).collect();
         
         group.bench_with_input(BenchmarkId::new("vectorized", format!("{:.2}", sel)), &datas,
