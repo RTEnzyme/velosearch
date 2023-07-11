@@ -1,6 +1,6 @@
 
 use clap::Parser;
-use fastfull_search::index::{BaseHandler, SplitHandler, SplitO1, SplitConstruct, BooleanQueryHandler, PostingHandler, TantivyHandler};
+use fastfull_search::index::{BaseHandler, SplitHandler, SplitO1, BooleanQueryHandler, PostingHandler, TantivyHandler};
 use fastfull_search::{Result, FastArgs, Handler};
 use fastfull_search::index::handler::HandlerT;
 use tracing::{info, Level};

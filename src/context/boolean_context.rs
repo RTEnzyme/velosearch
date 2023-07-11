@@ -14,7 +14,7 @@ use parking_lot::RwLock;
 use tokio::time::Instant;
 use tracing::debug;
 
-use crate::{query::boolean_query::BooleanQuery, utils::FastErr, BooleanPhysicalPlanner, IntersectionSelection, MinOperationRange, PartitionPredicateReorder, RewriteBooleanPredicate};
+use crate::{query::boolean_query::BooleanQuery, utils::FastErr, BooleanPhysicalPlanner, IntersectionSelection, MinOperationRange, PartitionPredicateReorder};
 use crate::utils::Result;
 
 #[derive(Clone)]

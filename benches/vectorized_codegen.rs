@@ -1,7 +1,7 @@
 
 use std::sync::Arc;
 
-use criterion::{Criterion, BenchmarkId, criterion_group, criterion_main, BatchSize};
+use criterion::{Criterion, BenchmarkId, criterion_group, criterion_main};
 use fastfull_search::jit::{create_boolean_query_fn, BOOLEAN_EVAL_FUNC};
 use rand::seq::IteratorRandom;
 use datafusion::{arrow::{array::BooleanArray, record_batch::RecordBatch, datatypes::{Schema, Field, DataType}}, physical_expr::BooleanQueryExpr, physical_plan::{expressions::{binary, col, Dnf}, PhysicalExpr}, logical_expr::Operator};
