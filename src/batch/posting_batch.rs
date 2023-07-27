@@ -1,9 +1,10 @@
-use std::{sync::{Arc, RwLock}, ops::Index, collections::{HashMap, BTreeMap}, cmp::max, mem::size_of_val};
+use std::{sync::{Arc, RwLock}, ops::Index, collections::{HashMap, BTreeMap}, cmp::max, mem::size_of_val, arch::x86_64::{_pext_u64, _mm512_mask_compressstoreu_epi8, __mmask64, _mm512_loadu_epi8}};
 
 use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array}, record_batch::RecordBatch}, from_slice::FromSlice, common::TermMeta};
 use crate::utils::{Result, FastErr};
 
-/// 
+/// The doc_id range [start, end) Batch range determines the  of relevant batch.
+/// nums32 = (end - start) / 32
 #[derive(Clone, Debug, PartialEq)]
 pub struct BatchRange {
     start: u32, 
@@ -12,6 +13,7 @@ pub struct BatchRange {
 }
 
 impl BatchRange {
+    /// new a BatchRange
     pub fn new(start: u32, end: u32) -> Self {
         Self {
             start,
@@ -20,17 +22,48 @@ impl BatchRange {
         }
     }
     
+    /// get the `end` of BatchRange
     pub fn end(&self) -> u32 {
         self.end
     }
 
+    /// get the `len` of BatchRange
     pub fn len(&self) -> u32 {
         self.end - self.start
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Freqs {
+    freqs: [Vec<u8>; 4],
+}
+
+impl Freqs {
+    pub fn extract_freqs(&self, masks: &[u64; 4]) -> Vec<u8> {
+        let cnt_0 = masks[0].count_ones() as isize;
+        let cnt_1 = masks[1].count_ones() as isize + cnt_0;
+        let cnt_2 = masks[2].count_ones() as isize + cnt_1;
+        let cnt_3 = masks[3].count_ones() as usize;
+        let valid_cnt = cnt_2 as usize + cnt_3;
+        let mut valid_freqs = Vec::with_capacity(valid_cnt);
+        unsafe {
+            let freqs = _mm512_loadu_epi8(self.freqs[0].as_ptr() as *const i8);
+            _mm512_mask_compressstoreu_epi8(valid_freqs.as_mut_ptr(), masks[0] as __mmask64, freqs);
+            let freqs = _mm512_loadu_epi8(self.freqs[1].as_ptr() as *const i8);
+            _mm512_mask_compressstoreu_epi8(valid_freqs.as_mut_ptr().offset(cnt_0), masks[1] as __mmask64, freqs);
+            let freqs = _mm512_loadu_epi8(self.freqs[2].as_ptr() as *const i8);
+            _mm512_mask_compressstoreu_epi8(valid_freqs.as_mut_ptr().offset(cnt_1), masks[2] as __mmask64, freqs);
+            let freqs = _mm512_loadu_epi8(self.freqs[3].as_ptr() as *const i8);
+            _mm512_mask_compressstoreu_epi8(valid_freqs.as_mut_ptr().offset(cnt_2), masks[3] as __mmask64, freqs);
+            valid_freqs.set_len(valid_cnt);
+        }
+        valid_freqs
+    }
+}
+
 pub type PostingList = Arc<UInt16Array>;
 pub type TermSchemaRef = SchemaRef;
+pub type BatchFreqs = Vec<Arc<Freqs>>;
 
 /// A batch of Postinglist which contain serveral terms,
 /// which is in range[start, end)
@@ -38,7 +71,7 @@ pub type TermSchemaRef = SchemaRef;
 pub struct PostingBatch {
     schema: TermSchemaRef,
     postings: Vec<PostingList>,
-
+    term_freqs: Option<BatchFreqs>,
     range: Arc<BatchRange>
 }
 
@@ -46,15 +79,25 @@ impl PostingBatch {
     pub fn try_new(
         schema: TermSchemaRef,
         postings: Vec<PostingList>,
-        range: Arc<BatchRange>
+        range: Arc<BatchRange>,
     ) -> Result<Self> {
-        Self::try_new_impl(schema, postings, range)
+        Self::try_new_impl(schema, postings, None, range)
+    }
+
+    pub fn try_new_with_freqs(
+        schema: TermSchemaRef,
+        postings: Vec<PostingList>,
+        term_freqs: BatchFreqs,
+        range: Arc<BatchRange>,
+    ) -> Result<Self> {
+        Self::try_new_impl(schema, postings, Some(term_freqs), range)
     }
 
     pub fn try_new_impl(
         schema: TermSchemaRef,
         postings: Vec<PostingList>,
-        range: Arc<BatchRange>
+        term_freqs: Option<BatchFreqs>,
+        range: Arc<BatchRange>,
     ) -> Result<Self> {
         if schema.fields().len() != postings.len() {
             return Err(FastErr::InternalErr(format!(
@@ -66,6 +109,7 @@ impl PostingBatch {
         Ok(Self {
             schema, 
             postings,
+            term_freqs,
             range
         })  
     }
@@ -86,6 +130,7 @@ impl PostingBatch {
         PostingBatch::try_new_impl(
             SchemaRef::new(projected_schema),
             projected_postings, 
+            None,
             self.range.clone()
         )
     }
@@ -325,7 +370,7 @@ mod test {
 
     use datafusion::{arrow::{datatypes::{Schema, Field, DataType}, array::{UInt16Array, BooleanArray}}, from_slice::FromSlice};
 
-    use super::{BatchRange, PostingBatch};
+    use super::{BatchRange, PostingBatch, Freqs};
 
     unsafe fn test_simd() -> __m512i {
         // let position: __m512i = __m512i::from(Simd::from([1, 3,5,7, 12, 16, 20, 22, 27, 29, 30, 33, 39, 44, 49, 66] as [u32;16]));
@@ -394,5 +439,25 @@ mod test {
 
         assert_eq!(res.column(0).as_any().downcast_ref::<BooleanArray>().unwrap(), &exptected1);
         assert_eq!(res.column(1).as_any().downcast_ref::<BooleanArray>().unwrap(), &exptected2);
+    }
+
+    #[test]
+    fn extract_freqs() {
+        let freqs = Freqs {
+            freqs: [
+                vec![1, 2, 3],
+                vec![4, 5],
+                vec![6, 7, 8, 9],
+                vec![10, 11],
+            ],
+        };
+        let masks = [
+            0b101 as u64,
+            0b00 as u64,
+            0b1101 as u64,
+            0b1 as u64,
+        ];
+        let res = freqs.extract_freqs(&masks);
+        assert_eq!(res, vec![1, 3, 6, 8, 9, 10]);
     }
 }
