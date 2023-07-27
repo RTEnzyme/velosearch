@@ -26,6 +26,5 @@ impl<T> HashTermIdx<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
 }

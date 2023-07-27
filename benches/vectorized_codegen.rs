@@ -89,7 +89,7 @@ fn vectorized_codegen(c: &mut Criterion) {
     let vectorized_expr = BooleanQueryExpr::new(binary_expr.clone());
     let codegen_expr = BooleanQueryExpr::new_with_fn(binary_expr, gen_func);
 
-    for i in 1..=50 {
+    for i in 1..=25 {
         let sel = i as f64 * 0.02;
         let datas: Vec<RecordBatch> = (0..1000).map(|_| gen_batch(sel)).collect();
         

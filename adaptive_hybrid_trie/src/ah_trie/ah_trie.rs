@@ -1,6 +1,6 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{sync::atomic::{AtomicUsize, Ordering}, collections::HashSet};
 
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use fst_rs::FST;
 use tokio::sync::RwLock;
 use std::sync::Arc;
@@ -24,17 +24,22 @@ pub struct AHTrie<T: Clone+Send+Sync> {
     /// A tokio runtime for executing synchronous operation
     // rt: Runtime,
     skip_length: usize,
-    epoch: usize,
+    epoch: AtomicUsize,
+    sample_size: usize,
+    // Record access term list in this epoch
+    access_list: Arc<DashSet<String>>,
     sampling_stat: Arc<DashMap<String, AccessStatistics>>,
+
 
     /// Inner Adaptive Hybrid Trie
     inner: Arc<RwLock<AHTrieInner<T>>>,
 
     /// Run-time tracing
+    sample_counter: AtomicUsize,
     skip_counter: AtomicUsize,
 }
 
-impl<T: Clone+Send+Sync> AHTrie<T> {
+impl<T: Clone+Send+Sync+'static> AHTrie<T> {
     pub fn new(keys: Vec<String>, values: Vec<T>, skip_length: usize) -> Self {
         Self::new_with_rt(
             keys,
@@ -45,37 +50,41 @@ impl<T: Clone+Send+Sync> AHTrie<T> {
     }
 
     pub fn new_with_rt(keys: Vec<String>, values: Vec<T>, skip_length: usize) -> Self {
+        let sample_size = 800 * ((2000 * keys.len() - 200_000) as f64).ln() as usize;
         Self {
             // rt,
             skip_length,
-            epoch: 0,
+            epoch: AtomicUsize::new(0),
+            sample_size: sample_size,
+            access_list: Arc::new(DashSet::new()),
             sampling_stat: Arc::new(DashMap::new()),
             inner: Arc::new(RwLock::new(AHTrieInner::new(keys, values, CUT_OFF))),
-            skip_counter: AtomicUsize::new(skip_length),
+            sample_counter: AtomicUsize::new(0),
+            skip_counter: AtomicUsize::new(0),
         }
     }
 
     #[inline]
     fn is_sample(&self) -> bool {
-        self.skip_counter.fetch_sub(1, Ordering::SeqCst);
-        match self.skip_counter.compare_exchange(0, self.skip_length, Ordering::SeqCst, Ordering::SeqCst)  {
+        self.skip_counter.fetch_add(1, Ordering::SeqCst);
+        match self.skip_counter.compare_exchange(self.skip_length, 0, Ordering::SeqCst, Ordering::SeqCst)  {
             Ok(_) => true,
             Err(_) => false,
         }
     }
 
     pub fn get(&self, key: &str) -> Option<T> {
-        if self.is_sample() {
-            self.trace(key);
-        }
         futures::executor::block_on(async {
+            if self.is_sample() {
+                self.trace(key).await;
+            }
             self.inner.as_ref().read().await.get(key).cloned()
         })
     }
 
     pub async fn get_async(&self, key: &str) -> Option<T> {
         if self.is_sample() {
-            self.trace(key);
+            self.trace(key).await;
         }
         self.inner.as_ref().read().await.get(key).cloned()
     }
@@ -91,66 +100,87 @@ impl<T: Clone+Send+Sync> AHTrie<T> {
     }
 
     #[inline]
-    fn trace(&self, key: &str) {
+    async fn trace(&self, key: &str) {
         debug!("start tracing");
-        let map = Arc::clone(&self.sampling_stat);
+        let map: Arc<DashMap<String, AccessStatistics>> = Arc::clone(&self.sampling_stat);
+        let access_list = Arc::clone(&self.access_list);
         let k = key.to_string();
         // use runtime to trace the statistics asynchronously.
-        tokio::task::spawn(async move {
+        tokio::spawn(async move {
+            // add term to access list in this epoch
+            access_list.insert(k.clone());
             map
                 .entry(k)
                 .and_modify(|v| v.reads += 1)
                 .or_insert(AccessStatistics { reads: 0 });
         });
+        let counter = self.sample_counter.fetch_add(1, Ordering::SeqCst);
+        if counter + 1 == self.sample_size {
+            let access_list = Arc::clone(&self.access_list);
+            let trie_root = Arc::clone(&self.inner);
+            tokio::spawn(async move {
+                let candidates: Vec<String> = access_list
+                    .as_ref()
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect();
+                access_list.clear();
+                for t in candidates {
+                    convert_encoding(trie_root.clone(), t.as_str(), Encoding::Art).await;
+                }
+            });
+        }
         debug!("end tracing");
     }
+}
 
-    async fn convert_encoding(&self, key: &str, encoding: Encoding) {
-        let cur_encoding = self.inner.read().await.encoding(&key);
-        match (cur_encoding, encoding) {
-            (Encoding::Art, Encoding::Fst(_)) => {
-                let inner_read_guard = self.inner.read().await;
-                let kvs = inner_read_guard.prefix_keys(&key[..CUT_OFF]);
-                let mut keys = Vec::new();
-                let mut values = Vec::new();
-                kvs.into_iter()
-                    .for_each(|(k, v)| {
-                        println!("FST k: {:?}", k.as_bytes());
-                        keys.push(k.as_bytes()[CUT_OFF..].to_vec());
-                        values.push(if let ChildNode::Offset(off) = v {*off} else {unreachable!()});
-                    });
-                let fst = FST::new_with_bytes(&keys, values);
-                // Safety
-                // Must drop RwLockReadGuard before acquiring RwLockWriteGuard
-                drop(inner_read_guard);
+async fn convert_encoding<T: Clone+Send+Sync>(ah_trie_root: Arc<RwLock<AHTrieInner<T>>>, key: &str, encoding: Encoding) {
+    let cur_encoding = ah_trie_root.read().await.encoding(&key);
+    match (cur_encoding, encoding) {
+        (Encoding::Art, Encoding::Fst(_)) => {
+            let inner_read_guard = ah_trie_root.read().await;
+            let kvs = inner_read_guard.prefix_keys(&key[..CUT_OFF]);
+            let mut keys = Vec::new();
+            let mut values = Vec::new();
+            kvs.into_iter()
+                .for_each(|(k, v)| {
+                    println!("FST k: {:?}", k.as_bytes());
+                    keys.push(k.as_bytes()[CUT_OFF..].to_vec());
+                    values.push(if let ChildNode::Offset(off) = v {*off} else {unreachable!()});
+                });
+            let fst = FST::new_with_bytes(&keys, values);
+            // Safety
+            // Must drop RwLockReadGuard before acquiring RwLockWriteGuard
+            drop(inner_read_guard);
 
-                let mut inner = self.inner.write().await;
-                for key in keys {
-                    inner.remove_bytes(&key);
-                }
-                inner.insert(&key[..CUT_OFF], ChildNode::Fst(fst));
+            let mut inner = ah_trie_root.write().await;
+            for key in keys {
+                inner.remove_bytes(&key);
             }
-            (Encoding::Fst(matched_length), Encoding::Art) => {
-                let inner_read_guard = self.inner.read().await;
-                let fst = inner_read_guard.get_fst(&key[..matched_length]).unwrap().clone();
-                // Safety:
-                // Must drop RwLockReadGuard before acquiring RwLockWriteGuard
-                drop(inner_read_guard);
-
-                let mut inner_write_guard = self.inner.write().await;
-                inner_write_guard.remove(&key[..matched_length]);
-                fst.iter()
-                    .for_each(|(k, v)| {
-                        inner_write_guard.insert_bytes(&[key[..matched_length].as_bytes(), &k].concat(), ChildNode::Offset(v as usize));
-                    })
-            }
-            _ => {}
+            inner.insert(&key[..CUT_OFF], ChildNode::Fst(fst));
         }
+        (Encoding::Fst(matched_length), Encoding::Art) => {
+            let inner_read_guard = ah_trie_root.read().await;
+            let fst = inner_read_guard.get_fst(&key[..matched_length]).unwrap().clone();
+            // Safety:
+            // Must drop RwLockReadGuard before acquiring RwLockWriteGuard
+            drop(inner_read_guard);
+
+            let mut inner_write_guard = ah_trie_root.write().await;
+            inner_write_guard.remove(&key[..matched_length]);
+            fst.iter()
+                .for_each(|(k, v)| {
+                    inner_write_guard.insert_bytes(&[key[..matched_length].as_bytes(), &k].concat(), ChildNode::Offset(v as usize));
+                })
+        }
+        _ => {}
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::ah_trie::ah_trie::convert_encoding;
+
     use super::{AHTrie, Encoding};
 
     macro_rules! ahtrie_test {
@@ -202,7 +232,7 @@ mod tests {
             "fast123".to_string(), "fast124".to_string(), "fast125".to_string(), "fast1255".to_string(),
         ];
         let trie = AHTrie::new(keys.clone(), (0..keys.len()).collect::<Vec<usize>>(), 20);
-        trie.convert_encoding("fast", Encoding::Art).await;
+        convert_encoding(trie.inner.clone(), "fast", Encoding::Art).await;
         
         // Should get the value correctly
         for (i, k) in keys.iter().enumerate() {
@@ -218,14 +248,14 @@ mod tests {
         ];
         let trie = AHTrie::new(keys.clone(), (0..keys.len()).collect::<Vec<usize>>(), 20);
         // Convert fst to art
-        trie.convert_encoding("fast125", Encoding::Art).await;
+        convert_encoding(trie.inner.clone(), "fast125", Encoding::Art).await;
         // Should get the value correctly
         for (i, k) in keys.iter().enumerate() {
             assert_eq!(trie.get(k.as_str()), Some(i));
         }
 
         // And then, convert art to fst
-        trie.convert_encoding("fast125", Encoding::Fst(0)).await;
+        convert_encoding(trie.inner.clone(), "fast125", Encoding::Fst(0)).await;
 
         // Should get the value correctly
         for (i, k) in keys.iter().enumerate() {
