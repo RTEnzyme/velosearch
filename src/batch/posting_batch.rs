@@ -1,6 +1,6 @@
-use std::{sync::{Arc, RwLock}, ops::Index, collections::{HashMap, BTreeMap}, cmp::max, mem::size_of_val, arch::x86_64::{_pext_u64, _mm512_mask_compressstoreu_epi8, __mmask64, _mm512_loadu_epi8}, ptr::NonNull};
+use std::{sync::{Arc, RwLock}, ops::Index, collections::{HashMap, BTreeMap}, cmp::max, mem::size_of_val, arch::x86_64::{_mm512_mask_compressstoreu_epi8, __mmask64, _mm512_loadu_epi8}, ptr::NonNull};
 
-use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, UInt8Array}, record_batch::RecordBatch, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
+use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray}, record_batch::RecordBatch, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
 use crate::utils::{Result, FastErr};
 
 /// The doc_id range [start, end) Batch range determines the  of relevant batch.
@@ -63,7 +63,7 @@ impl Freqs {
 
 pub type PostingList = Arc<UInt16Array>;
 pub type TermSchemaRef = SchemaRef;
-pub type BatchFreqs = Vec<Arc<UInt8Array>>;
+pub type BatchFreqs = Vec<Arc<GenericListArray<i32>>>;
 
 /// A batch of Postinglist which contain serveral terms,
 /// which is in range[start, end)
@@ -188,7 +188,7 @@ impl PostingBatch {
         let mut freqs = fields
             .iter()
             .filter(|v| v.name() != "__id__")
-            .map(|v| Field::new(format!("{}_freq", v.name()), DataType::UInt8, false)).collect();
+            .map(|v| Field::new(format!("{}_freq", v.name()), DataType::UInt8, true)).collect();
         fields.append(&mut freqs);
         let mut freqs: Vec<ArrayRef> = Vec::with_capacity(indices.len());
         let bitmask_size: usize = self.range.len() as usize;
@@ -435,7 +435,7 @@ fn build_boolean_array(mut data: Vec<u64>, batch_len: usize) -> ArrayRef {
 mod test {
     use std::{arch::x86_64::{ __m512i, _mm512_sllv_epi32}, simd::Simd, sync::Arc};
 
-    use datafusion::{arrow::{datatypes::{Schema, Field, DataType}, array::{UInt16Array, BooleanArray, UInt8Array}}, from_slice::FromSlice};
+    use datafusion::{arrow::{datatypes::{Schema, Field, DataType, UInt8Type}, array::{UInt16Array, BooleanArray, GenericListArray}}, from_slice::FromSlice};
 
     use super::{BatchRange, PostingBatch, Freqs};
 
@@ -503,11 +503,36 @@ mod test {
            Arc::new(UInt16Array::from_slice([])),
         ];
         let freqs = vec![
-            Arc::new(UInt8Array::from_slice([1, 2, 4, 5])),
-            Arc::new(UInt8Array::from_slice([1, 2, 2, 0, 3, 5])),
-            Arc::new(UInt8Array::from_slice([2, 1, 2])),
-            Arc::new(UInt8Array::from_slice([1, 1, 1])),
-            Arc::new(UInt8Array::from_slice([])),
+            Arc::new(GenericListArray::from_iter_primitive::<UInt8Type, _, _>(vec![
+                Some(vec![Some(1 as u8), Some(2), Some(3)]),
+                None,
+                None,
+                Some(vec![Some(22), Some(2), Some(2)]),
+            ])),
+            Arc::new(GenericListArray::from_iter_primitive::<UInt8Type, _, _>(vec![
+                Some(vec![Some(2), Some(1)]),
+                None,
+                Some(vec![Some(1), Some(2)]),
+                None,
+            ])),
+            Arc::new(GenericListArray::from_iter_primitive::<UInt8Type, _, _>(vec![
+                Some(vec![Some(3), Some(1), Some(1)]),
+                None,
+                None,
+                None,
+            ])),
+            Arc::new(GenericListArray::from_iter_primitive::<UInt8Type, _, _>(vec![
+                None,
+                Some(vec![Some(1), Some(2), Some(2)]),
+                None,
+                None,
+            ])),
+            Arc::new(GenericListArray::from_iter_primitive::<UInt8Type, _, _>(vec![
+                None as Option<Vec<Option<u8>>>,
+                None,
+                None,
+                None,
+            ])),
         ];
         PostingBatch::try_new_with_freqs(schema, postings, freqs, range).unwrap()
     }
