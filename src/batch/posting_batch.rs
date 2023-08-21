@@ -1,6 +1,6 @@
-use std::{sync::{Arc, RwLock}, ops::Index, collections::{HashMap, BTreeMap}, cmp::max, mem::size_of_val, arch::x86_64::{_pext_u64, _mm512_mask_compressstoreu_epi8, __mmask64, _mm512_loadu_epi8}};
+use std::{sync::{Arc, RwLock}, ops::Index, collections::{HashMap, BTreeMap}, cmp::max, mem::size_of_val, arch::x86_64::{_pext_u64, _mm512_mask_compressstoreu_epi8, __mmask64, _mm512_loadu_epi8}, ptr::NonNull};
 
-use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array}, record_batch::RecordBatch}, from_slice::FromSlice, common::TermMeta};
+use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, UInt8Array}, record_batch::RecordBatch, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
 use crate::utils::{Result, FastErr};
 
 /// The doc_id range [start, end) Batch range determines the  of relevant batch.
@@ -63,7 +63,7 @@ impl Freqs {
 
 pub type PostingList = Arc<UInt16Array>;
 pub type TermSchemaRef = SchemaRef;
-pub type BatchFreqs = Vec<Arc<Freqs>>;
+pub type BatchFreqs = Vec<Arc<UInt8Array>>;
 
 /// A batch of Postinglist which contain serveral terms,
 /// which is in range[start, end)
@@ -161,7 +161,9 @@ impl PostingBatch {
                 batches.push(Arc::new(BooleanArray::from(bitmap)));
                 continue;
             }
-            let idx = idx.unwrap();
+
+            // Safety: If idx is none, this loop will continue before this unwrap_unchecked()
+            let idx = unsafe{ idx.unwrap_unchecked() };
             let posting = self.postings.get(idx).cloned().ok_or_else(|| {
                 FastErr::InternalErr(format!(
                     "project index {} out of bounds, max field {}",
@@ -178,6 +180,56 @@ impl PostingBatch {
         }
         batches.insert(projected_schema.index_of("__id__").expect("Should have __id__ field"), Arc::new(UInt32Array::from_iter_values((self.range.start).. (self.range.start + 32 * self.range.nums32))));
         Ok(RecordBatch::try_new(projected_schema, batches)?)
+    }
+
+    pub fn project_fold_with_freqs(&self, indices: &[Option<usize>], projected_schema: SchemaRef) -> Result<RecordBatch> {
+        // Add freqs fields
+        let mut fields = projected_schema.fields().clone();
+        let mut freqs = fields
+            .iter()
+            .filter(|v| v.name() != "__id__")
+            .map(|v| Field::new(format!("{}_freq", v.name()), DataType::UInt8, false)).collect();
+        fields.append(&mut freqs);
+        let mut freqs: Vec<ArrayRef> = Vec::with_capacity(indices.len());
+        let bitmask_size: usize = self.range.len() as usize;
+        let mut batches: Vec<ArrayRef> = Vec::with_capacity(indices.len());
+        for idx in indices {
+            // Use customized construction for performance
+            let mut bitmap = vec![0; bitmask_size / 64];
+            if idx.is_none() {
+                batches.push(build_boolean_array(bitmap, bitmask_size));
+                continue;
+            }
+
+            // Safety: If idx is none, this loop will continue before this unwrap_unchecked()
+            let idx = unsafe { idx.unwrap_unchecked() };
+            let posting = self.postings.get(idx).cloned().ok_or_else(|| {
+                FastErr::InternalErr(format!(
+                    "project index {} out of bounds, max field {}",
+                    idx,
+                    self.postings.len(),
+                ))
+            })?;
+            posting.values()
+            .iter()
+            .for_each(|v| bitmap[(*v >> 6) as usize] |= 1 << (*v % 64) as usize);
+            batches.push(build_boolean_array(bitmap, bitmask_size));
+            // add freqs array
+            freqs.push(self.term_freqs.as_ref().unwrap().get(idx).cloned().ok_or_else(|| {
+                FastErr::InternalErr(format!(
+                    "freqs index {} out of bounds, term_freq is none: {}",
+                    idx,
+                    self.term_freqs.is_none(),
+                ))
+            })?);
+        }
+        batches.extend(freqs.into_iter());
+        // Update: Don't add array for __id__
+        let projected_schema = Arc::new(Schema::new(fields));
+        Ok(RecordBatch::try_new(
+            projected_schema,
+            batches,
+        )?)
     }
 
     pub fn space_usage(&self) -> usize {
@@ -364,11 +416,25 @@ impl TermMetaBuilder {
     }
 }
 
+fn build_boolean_array(mut data: Vec<u64>, batch_len: usize) -> ArrayRef {
+    let value_buffer = unsafe {
+        let buf = Buffer::from_raw_parts(NonNull::new_unchecked(data.as_mut_ptr() as *mut u8), batch_len, batch_len);
+        std::mem::forget(data);
+        buf
+    };
+    let builder = ArrayData::builder(DataType::Boolean)
+        .len(batch_len)
+        .add_buffer(value_buffer);
+
+    let array_data = unsafe { builder.build_unchecked() };
+    Arc::new(BooleanArray::from(array_data))
+}
+
 #[cfg(test)]
 mod test {
     use std::{arch::x86_64::{ __m512i, _mm512_sllv_epi32}, simd::Simd, sync::Arc};
 
-    use datafusion::{arrow::{datatypes::{Schema, Field, DataType}, array::{UInt16Array, BooleanArray}}, from_slice::FromSlice};
+    use datafusion::{arrow::{datatypes::{Schema, Field, DataType}, array::{UInt16Array, BooleanArray, UInt8Array}}, from_slice::FromSlice};
 
     use super::{BatchRange, PostingBatch, Freqs};
 
@@ -415,8 +481,7 @@ mod test {
         PostingBatch::try_new(schema, postings, range).unwrap()
     }
 
-    #[test]
-    fn postingbatch_project_fold() {
+    fn build_batch_with_freqs() -> PostingBatch {
         let schema = Arc::new(Schema::new(vec![
             Field::new("test1", DataType::Boolean, true),
             Field::new("test2", DataType::Boolean, true),
@@ -424,8 +489,39 @@ mod test {
             Field::new("test4", DataType::Boolean, true),
             Field::new("__id__", DataType::UInt32, false),
         ]));
+        let range = Arc::new(BatchRange {
+            start: 0,
+            end: 64,
+            nums32: 1
+        });
+        let postings = vec![
+           Arc::new(UInt16Array::from_slice([1, 6, 9])),
+           Arc::new(UInt16Array::from_slice([0, 4, 16])),
+           Arc::new(UInt16Array::from_slice([4, 6, 8])),
+           Arc::new(UInt16Array::from_slice([6, 16, 31])),
+           Arc::new(UInt16Array::from_slice([])),
+        ];
+        let freqs = vec![
+            Arc::new(UInt8Array::from_slice([1, 2, 4, 5])),
+            Arc::new(UInt8Array::from_slice([1, 2, 2, 0, 3, 5])),
+            Arc::new(UInt8Array::from_slice([2, 1, 2])),
+            Arc::new(UInt8Array::from_slice([1, 1, 1])),
+            Arc::new(UInt8Array::from_slice([])),
+        ];
+        PostingBatch::try_new_with_freqs(schema, postings, freqs, range).unwrap()
+    }
+
+    #[test]
+    fn postingbatch_project_fold() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("test1", DataType::Boolean, false),
+            Field::new("test2", DataType::Boolean, false),
+            Field::new("test3", DataType::Boolean, false),
+            Field::new("test4", DataType::Boolean, false),
+            Field::new("__id__", DataType::UInt32, false),
+        ]));
         let batch = build_batch();
-        let res = batch.project_fold(&[Some(1), Some(2)], schema.clone()).unwrap();
+        let res = batch.project_fold(&[Some(1), Some(2)], Arc::new(schema.clone().project(&[1, 2, 4]).unwrap())).unwrap();
         let mut exptected1 = vec![false; 64];
         exptected1[0] = true;
         exptected1[4] = true;
@@ -437,6 +533,32 @@ mod test {
         exptected2[8] = true;
         let exptected2 = BooleanArray::from(exptected2);
 
+        assert_eq!(res.column(0).as_any().downcast_ref::<BooleanArray>().unwrap(), &exptected1);
+        assert_eq!(res.column(1).as_any().downcast_ref::<BooleanArray>().unwrap(), &exptected2);
+    }
+
+    #[test]
+    fn postingbatch_project_fold_with_freqs() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("test1", DataType::Boolean, false),
+            Field::new("test2", DataType::Boolean, false),
+            Field::new("test3", DataType::Boolean, false),
+            Field::new("test4", DataType::Boolean, false),
+        ]));
+        let batch = build_batch_with_freqs();
+        let res = batch.project_fold_with_freqs(&[Some(1), Some(2)], Arc::new(schema.clone().project(&[1, 2]).unwrap())).unwrap();
+        let mut exptected1 = vec![false; 64];
+        exptected1[0] = true;
+        exptected1[4] = true;
+        exptected1[16] = true;
+        let exptected1 = BooleanArray::from(exptected1);
+        let mut exptected2 = vec![false; 64];
+        exptected2[4] = true;
+        exptected2[6] = true;
+        exptected2[8] = true;
+        let exptected2 = BooleanArray::from(exptected2);
+        println!("buffer: {:?}", res.column(0).data().buffers()[0].as_slice());
+        println!("res: {:?}", res);
         assert_eq!(res.column(0).as_any().downcast_ref::<BooleanArray>().unwrap(), &exptected1);
         assert_eq!(res.column(1).as_any().downcast_ref::<BooleanArray>().unwrap(), &exptected2);
     }
