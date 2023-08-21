@@ -103,6 +103,7 @@ pub struct PostingExec {
     pub projected_schema: SchemaRef,
     pub projection: Option<Vec<usize>>,
     pub partition_min_range: Option<Vec<Arc<BooleanArray>>>,
+    pub is_score: bool,
     metric: ExecutionPlanMetricsSet,
 }
 
@@ -159,6 +160,7 @@ impl ExecutionPlan for PostingExec {
             self.projected_schema.clone(),
             self.partition_min_range.as_ref().unwrap()[partition].clone(),
             self.term_idx[partition].clone(),
+            self.is_score,
         )?))
     }
 
@@ -213,6 +215,7 @@ impl PostingExec {
             projected_schema,
             projection,
             partition_min_range,
+            is_score: false,
             metric: ExecutionPlanMetricsSet::new(),
         })
     }
@@ -247,6 +250,7 @@ impl PostingStream {
         schema: SchemaRef,
         min_range: Arc<BooleanArray>,
         term_idx: Arc<TermIdx<TermMeta>>,
+        is_score: bool,
     ) -> Result<Self> {
         debug!("Try new a PostingStream");
         let valid_cnt = min_range.true_count();
@@ -273,15 +277,27 @@ impl PostingStream {
                     project_idx[i].push(term.map(|v| v as usize))
                 }
             }
-            // project_fold传入&[Option<usize>]和projected_schema
-            data.as_ref().into_iter()
-                .zip(project_idx.into_iter())
-                .zip(min_range.into_iter())
-                .filter(|(_, v)| v.unwrap())
-                .map(|((d, p), _)| 
-                    d.project_fold(&p, schema_async.clone()).map_err(|e| DataFusionError::Execution(e.to_string()))
-                )
-                .collect::<Result<Vec<RecordBatch>>>().unwrap()
+            if is_score {
+                data.as_ref().into_iter()
+                    .zip(project_idx.into_iter())
+                    .zip(min_range.into_iter())
+                    .filter(|(_, v)| v.unwrap())
+                    .map(|((d, p), _)| {
+                        d.project_fold_with_freqs(&p, schema_async.clone()).map_err(|e| DataFusionError
+                        ::Execution(e.to_string()))
+                    })
+                    .collect::<Result<Vec<RecordBatch>>>().unwrap()
+            } else {
+                // project_fold传入&[Option<usize>]和projected_schema
+                data.as_ref().into_iter()
+                    .zip(project_idx.into_iter())
+                    .zip(min_range.into_iter())
+                    .filter(|(_, v)| v.unwrap())
+                    .map(|((d, p), _)| 
+                        d.project_fold(&p, schema_async.clone()).map_err(|e| DataFusionError::Execution(e.to_string()))
+                    )
+                    .collect::<Result<Vec<RecordBatch>>>().unwrap()
+            }
         };
         debug!("Obtain the valid distri");
         

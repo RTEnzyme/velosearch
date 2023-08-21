@@ -49,6 +49,7 @@ impl PhysicalOptimizerRule for PartitionPredicateReorder {
                             reorder_predicate,
                             boolean.input.clone(),
                             boolean.terms_stats.clone(),
+                            boolean.is_score,
                         )?))
                     } else {
                         Ok(plan)

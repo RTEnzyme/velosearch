@@ -165,6 +165,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                 boolean.predicate.to_owned(),
                 boolean.input().clone(),
                 Some(term_stats),
+                boolean.is_score,
             )?))
         } else if let Some(posting) = node.as_any().downcast_ref::<PostingExec>() {
             debug!("Mutate PostingExec");

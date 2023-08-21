@@ -60,6 +60,7 @@ impl PhysicalOptimizerRule for IntersectionSelection {
                             predicates,
                             boolean.input.clone(),
                             boolean.terms_stats.clone(),
+                            boolean.is_score,
                         )?
                     )))
                 } else {
