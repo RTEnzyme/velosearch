@@ -223,6 +223,7 @@ impl PostingBatch {
                 ))
             })?);
         }
+        batches.insert(projected_schema.index_of("__id__").expect("Should have __id__ field"), Arc::new(UInt32Array::from_slice([])));
         batches.extend(freqs.into_iter());
         // Update: Don't add array for __id__
         let projected_schema = Arc::new(Schema::new(fields));
@@ -544,9 +545,10 @@ mod test {
             Field::new("test2", DataType::Boolean, false),
             Field::new("test3", DataType::Boolean, false),
             Field::new("test4", DataType::Boolean, false),
+            Field::new("__id__", DataType::UInt32, false),
         ]));
         let batch = build_batch_with_freqs();
-        let res = batch.project_fold_with_freqs(&[Some(1), Some(2)], Arc::new(schema.clone().project(&[1, 2]).unwrap())).unwrap();
+        let res = batch.project_fold_with_freqs(&[Some(1), Some(2)], Arc::new(schema.clone().project(&[1, 2, 4]).unwrap())).unwrap();
         let mut exptected1 = vec![false; 64];
         exptected1[0] = true;
         exptected1[4] = true;
