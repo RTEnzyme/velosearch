@@ -100,7 +100,7 @@ impl BooleanQuery {
     }
 
     /// Create BooleanQuery based on a bitwise binary operation expression
-    pub fn boolean_predicate(self, predicate: Expr) -> Result<Self> {
+    pub fn boolean_predicate(self, predicate: Expr, is_score: bool) -> Result<Self> {
         debug!("Build boolean_predicate");
         let mut project_exprs = binary_expr_columns(&predicate);
         project_exprs.push(col("__id__"));
@@ -117,7 +117,7 @@ impl BooleanQuery {
                 let project_plan = boolean_project(self.plan, project_exprs, input_schema).unwrap();
                 let project_plan = LogicalPlanBuilder::from(project_plan).build()?;
                 Ok(Self {
-                    plan: LogicalPlanBuilder::from(project_plan).boolean(Expr::BooleanQuery(expr))?.build()?,
+                    plan: LogicalPlanBuilder::from(project_plan).boolean(Expr::BooleanQuery(expr), is_score)?.build()?,
                     session_state: self.session_state 
                 })
             },

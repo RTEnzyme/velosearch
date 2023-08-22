@@ -49,6 +49,7 @@ struct GetMinRange {
     partition_stats: Option<Vec<Vec<Option<TermMeta>>>>,
     partition_schema: Option<Arc<Schema>>,
     predicate: Option<Arc<BooleanQueryExpr>>,
+    is_score: bool,
     min_range: Option<Vec<Arc<BooleanArray>>>,
 }
 
@@ -58,6 +59,7 @@ impl GetMinRange {
             partition_stats: None,
             partition_schema: None,
             predicate: None,
+            is_score: false,
             min_range: None,
         }
     }
@@ -72,6 +74,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
             debug!("Pre_visit BooleanExec");
             self.partition_schema = Some(boolean.input.schema().clone());
             self.predicate = Some(Arc::new(boolean.predicate().clone()));
+            self.is_score = boolean.is_score;
             Ok(RewriteRecursion::Continue)
         } else if let Some(posting) = any_node.downcast_ref::<PostingExec>(){
             debug!("Pre_visit PostingExec");

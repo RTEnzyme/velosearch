@@ -110,7 +110,7 @@ impl HandlerT for PostingHandler {
                 let predicate = predicate.with_must(predicate1).unwrap();
                 let predicate = predicate.build();
                 info!("Predicate{:}: {:?}", i, predicate);
-                let index = ctx.boolean("__table__", predicate).await.unwrap();
+                let index = ctx.boolean("__table__", predicate, false).await.unwrap();
                 let timer = Instant::now();
                     index
                     // .explain(false, true).unwrap()

@@ -94,6 +94,7 @@ impl BooleanContext {
         &self,
         index_ref: impl Into<TableReference<'a>>,
         predicate: Expr,
+        is_score: bool,
     ) -> Result<BooleanQuery> {
         let index_ref = index_ref.into();
         let index = index_ref.table().to_owned();
@@ -109,7 +110,7 @@ impl BooleanContext {
                 &index,
                 provider_as_source(Arc::clone(&provider)),
                 Some(project),
-            )?.boolean(Expr::BooleanQuery(expr))?.build()?;
+            )?.boolean(Expr::BooleanQuery(expr), is_score)?.build()?;
             Ok(BooleanQuery::new(
                 plan,
                 self.state(),
