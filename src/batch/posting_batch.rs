@@ -1,6 +1,6 @@
-use std::{sync::{Arc, RwLock}, ops::Index, collections::{HashMap, BTreeMap}, cmp::max, mem::size_of_val, arch::x86_64::{_mm512_mask_compressstoreu_epi8, __mmask64, _mm512_loadu_epi8}, ptr::NonNull};
+use std::{sync::{Arc, RwLock}, ops::Index, collections::{HashMap, BTreeMap}, cmp::max, mem::size_of_val, ptr::NonNull};
 
-use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray}, record_batch::RecordBatch, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
+use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray}, record_batch::RecordBatch, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
 use crate::utils::{Result, FastErr};
 
 /// The doc_id range [start, end) Batch range determines the  of relevant batch.
@@ -33,35 +33,35 @@ impl BatchRange {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct Freqs {
-    freqs: [Vec<u8>; 4],
-}
+// #[derive(Clone, Debug, PartialEq)]
+// pub struct Freqs {
+//     freqs: [Vec<u8>; 4],
+// }
 
-impl Freqs {
-    pub fn extract_freqs(&self, masks: &[u64; 4]) -> Vec<u8> {
-        let cnt_0 = masks[0].count_ones() as isize;
-        let cnt_1 = masks[1].count_ones() as isize + cnt_0;
-        let cnt_2 = masks[2].count_ones() as isize + cnt_1;
-        let cnt_3 = masks[3].count_ones() as usize;
-        let valid_cnt = cnt_2 as usize + cnt_3;
-        let mut valid_freqs = Vec::with_capacity(valid_cnt);
-        unsafe {
-            let freqs = _mm512_loadu_epi8(self.freqs[0].as_ptr() as *const i8);
-            _mm512_mask_compressstoreu_epi8(valid_freqs.as_mut_ptr(), masks[0] as __mmask64, freqs);
-            let freqs = _mm512_loadu_epi8(self.freqs[1].as_ptr() as *const i8);
-            _mm512_mask_compressstoreu_epi8(valid_freqs.as_mut_ptr().offset(cnt_0), masks[1] as __mmask64, freqs);
-            let freqs = _mm512_loadu_epi8(self.freqs[2].as_ptr() as *const i8);
-            _mm512_mask_compressstoreu_epi8(valid_freqs.as_mut_ptr().offset(cnt_1), masks[2] as __mmask64, freqs);
-            let freqs = _mm512_loadu_epi8(self.freqs[3].as_ptr() as *const i8);
-            _mm512_mask_compressstoreu_epi8(valid_freqs.as_mut_ptr().offset(cnt_2), masks[3] as __mmask64, freqs);
-            valid_freqs.set_len(valid_cnt);
-        }
-        valid_freqs
-    }
-}
+// impl Freqs {
+//     pub fn extract_freqs(&self, masks: &[u64; 4]) -> Vec<u8> {
+//         let cnt_0 = masks[0].count_ones() as isize;
+//         let cnt_1 = masks[1].count_ones() as isize + cnt_0;
+//         let cnt_2 = masks[2].count_ones() as isize + cnt_1;
+//         let cnt_3 = masks[3].count_ones() as usize;
+//         let valid_cnt = cnt_2 as usize + cnt_3;
+//         let mut valid_freqs = Vec::with_capacity(valid_cnt);
+//         unsafe {
+//             let freqs = _mm512_loadu_epi8(self.freqs[0].as_ptr() as *const i8);
+//             _mm512_mask_compressstoreu_epi8(valid_freqs.as_mut_ptr(), masks[0] as __mmask64, freqs);
+//             let freqs = _mm512_loadu_epi8(self.freqs[1].as_ptr() as *const i8);
+//             _mm512_mask_compressstoreu_epi8(valid_freqs.as_mut_ptr().offset(cnt_0), masks[1] as __mmask64, freqs);
+//             let freqs = _mm512_loadu_epi8(self.freqs[2].as_ptr() as *const i8);
+//             _mm512_mask_compressstoreu_epi8(valid_freqs.as_mut_ptr().offset(cnt_1), masks[2] as __mmask64, freqs);
+//             let freqs = _mm512_loadu_epi8(self.freqs[3].as_ptr() as *const i8);
+//             _mm512_mask_compressstoreu_epi8(valid_freqs.as_mut_ptr().offset(cnt_2), masks[3] as __mmask64, freqs);
+//             valid_freqs.set_len(valid_cnt);
+//         }
+//         valid_freqs
+//     }
+// }
 
-pub type PostingList = Arc<UInt16Array>;
+pub type PostingList = ArrayRef;
 pub type TermSchemaRef = SchemaRef;
 pub type BatchFreqs = Vec<Arc<GenericListArray<i32>>>;
 
@@ -171,12 +171,20 @@ impl PostingBatch {
                     self.postings.len()
                 ))
             })?;
-            posting.values()
-            .iter()
-            .for_each(|v| {
-                bitmap[*v as usize] = true
-            });
-            batches.push(Arc::new(BooleanArray::from(bitmap)));
+            match posting.data_type() {
+                DataType::Boolean => batches.push(posting.clone()),
+                DataType::UInt16 => {
+                    posting.as_any()
+                    .downcast_ref::<UInt16Array>()
+                    .unwrap()
+                    .iter()
+                    .for_each(|v| {
+                        bitmap[v.unwrap() as usize] = true
+                    });
+                    batches.push(Arc::new(BooleanArray::from(bitmap)));
+                }
+                _ => {}
+            }
         }
         batches.insert(projected_schema.index_of("__id__").expect("Should have __id__ field"), Arc::new(UInt32Array::from_iter_values((self.range.start).. (self.range.start + 32 * self.range.nums32))));
         Ok(RecordBatch::try_new(projected_schema, batches)?)
@@ -210,10 +218,21 @@ impl PostingBatch {
                     self.postings.len(),
                 ))
             })?;
-            posting.values()
-            .iter()
-            .for_each(|v| bitmap[(*v >> 6) as usize] |= 1 << (*v % 64) as usize);
-            batches.push(build_boolean_array(bitmap, bitmask_size));
+            match posting.data_type() {
+                DataType::Boolean => batches.push(posting.clone()),
+                DataType::UInt16 => {
+                    posting.as_any()
+                    .downcast_ref::<UInt16Array>()
+                    .unwrap()
+                    .iter()
+                    .for_each(|v| {
+                        let v = v.unwrap();
+                        bitmap[v as usize >> 6] |= 1 << (v % 64) as usize;
+                    });
+                    batches.push(build_boolean_array(bitmap, bitmask_size));
+                }
+                _ => {}
+            }
             // add freqs array
             freqs.push(self.term_freqs.as_ref().unwrap().get(idx).cloned().ok_or_else(|| {
                 FastErr::InternalErr(format!(
@@ -282,7 +301,7 @@ impl Index<&str> for PostingBatch {
 pub struct PostingBatchBuilder {
     start: u32,
     current: u32,
-    term_dict: RwLock<HashMap<String, Vec<u16>>>,
+    term_dict: RwLock<HashMap<String, Vec<(u16, u8)>>>,
     term_num: usize,
 }
 
@@ -301,36 +320,26 @@ impl PostingBatchBuilder {
     }
 
     pub fn push_term(&mut self, term: String, doc_id: u32) -> Result<()> {
-        self.term_dict
+        let entry = self.term_dict
             .get_mut()
             .map_err(|_| FastErr::InternalErr("Can't acquire the RwLock correctly".to_string()))?
             .entry(term)
-            .or_insert(Vec::new())
-            .push((doc_id - self.start) as u16);
+            .or_insert(vec![((doc_id - self.start) as u16, 0)]);
+        unsafe { entry.last_mut().unwrap_unchecked().1 += 1 }
         self.current = doc_id;
         self.term_num += 1;
         Ok(())
     }
 
-    pub fn push_term_posting(&mut self, term: String, doc_ids: Vec<u32>) -> Result<()> {
-        let current = max(self.current, doc_ids[doc_ids.len() - 1]);
+    pub fn push_term_posting(&mut self, term: String, doc_ids: Vec<(u32, u8)>) -> Result<()> {
+        let current = max(self.current, doc_ids[doc_ids.len() - 1].0);
         self.term_dict
             .get_mut()
             .map_err(|_| FastErr::InternalErr(format!("Can't acquire the RwLock correctly")))?
             .entry(term)
             .or_insert(Vec::new())
-            .extend(doc_ids.into_iter().map(|v| (v - self.start) as u16));
+            .extend(doc_ids.into_iter().map(|v| ((v.0 - self.start) as u16, v.1)));
         self.current = current;
-        Ok(())
-    }
-
-    pub fn push_terms(&mut self, terms: Vec<String>, doc_id: u32) -> Result<()> {
-        let term_dict = self.term_dict.get_mut().map_err(|_| {
-            FastErr::InternalErr("Can't acquire the RwLock correctly".to_string())
-        })?;
-        let doc_id = (doc_id - self.start) as u16;
-        terms.into_iter()
-        .for_each(|v| term_dict.entry(v).or_insert(Vec::new()).push(doc_id));
         Ok(())
     }
 
@@ -339,18 +348,46 @@ impl PostingBatchBuilder {
             .into_inner()
             .expect("Can't acquire the RwLock correctly");
         let mut schema_list = Vec::new();
-        let mut postings = Vec::new();
+        let mut postings: Vec<ArrayRef> = Vec::new();
+        let mut freqs = Vec::new();
         term_dict
             .into_iter()
             .for_each(|(k, v)| {
-                schema_list.push(Field::new(k, DataType::UInt32, false));
-                postings.push(Arc::new(UInt16Array::from(v)));
+                let mut freq: Vec<Option<Vec<Option<u8>>>> = vec![None; 4];
+                let mut posting = Vec::with_capacity(v.len());
+                let v_len = v.len();
+                v.into_iter()
+                .for_each(|(p, f)| {
+                    posting.push(p);
+                    let idx=  f / 64 % 8;
+                    match freq[idx as usize] {
+                        Some(ref mut v) => {
+                            v.push(Some(f));
+                        }
+                        None => {
+                            freq[idx as usize] = Some(vec![Some(f)]);
+                        }
+                    }
+                });
+                freqs.push(Arc::new(GenericListArray::<i32>::from_iter_primitive::<UInt8Type, _, _>(freq)));
+                if v_len > 32 {
+                    let mut bitmap = vec![false; 512];
+                    for i in posting {
+                        bitmap[i as usize] = true;
+                    }
+                    schema_list.push(Field::new(k, DataType::Boolean, false));
+                    postings.push(Arc::new(BooleanArray::from(bitmap)));
+                } else {
+                    schema_list.push(Field::new(k, DataType::UInt32, false));
+                    postings.push(Arc::new(UInt16Array::from(posting)));
+                }
             });
         schema_list.push(Field::new("__id__", DataType::UInt32, false));
         postings.push(Arc::new(UInt16Array::from_slice(&[])));
-       PostingBatch::try_new(
+       PostingBatch::try_new_with_freqs(
             Arc::new(Schema::new(schema_list)),
             postings,
+            freqs,
             Arc::new(BatchRange::new(self.start, self.current + 1)))
     }
 
@@ -359,20 +396,48 @@ impl PostingBatchBuilder {
             .into_inner()
             .expect("Can't acquire the RwLock correctly");
         let mut schema_list = Vec::new();
-        let mut postings = Vec::new();
+        let mut postings: Vec<ArrayRef> = Vec::new();
+        let mut freqs = Vec::new();
         term_dict
             .into_iter()
             .enumerate()
             .for_each(|(i, (k, v))| {
                 idx.get_mut(&k).unwrap().add_idx((batch_idx, i as u16));
-                schema_list.push(Field::new(k, DataType::UInt32, false));
-                postings.push(Arc::new(UInt16Array::from(v)));
+                let mut freq: Vec<Option<Vec<Option<u8>>>> = vec![None; 4];
+                let mut posting = Vec::with_capacity(v.len());
+                let v_len = v.len();
+                v.into_iter()
+                .for_each(|(p, f)| {
+                    posting.push(p);
+                    let idx=  f / 64 % 8;
+                    match freq[idx as usize] {
+                        Some(ref mut v) => {
+                            v.push(Some(f));
+                        }
+                        None => {
+                            freq[idx as usize] = Some(vec![Some(f)]);
+                        }
+                    }
+                });
+                freqs.push(Arc::new(GenericListArray::<i32>::from_iter_primitive::<UInt8Type, _, _>(freq)));
+                if v_len > 32 {
+                    let mut bitmap = vec![false; 512];
+                    for i in posting {
+                        bitmap[i as usize] = true;
+                    }
+                    schema_list.push(Field::new(k, DataType::Boolean, false));
+                    postings.push(Arc::new(BooleanArray::from(bitmap)));
+                } else {
+                    schema_list.push(Field::new(k, DataType::UInt32, false));
+                    postings.push(Arc::new(UInt16Array::from(posting)));
+                }
             });
         schema_list.push(Field::new("__id__", DataType::UInt32, false));
         postings.push(Arc::new(UInt16Array::from_slice(&[])));
-        PostingBatch::try_new(
+        PostingBatch::try_new_with_freqs(
             Arc::new(Schema::new(schema_list)),
             postings,
+            freqs,
             Arc::new(BatchRange::new(self.start, self.current + 1))
         )
     }
@@ -433,31 +498,11 @@ fn build_boolean_array(mut data: Vec<u64>, batch_len: usize) -> ArrayRef {
 
 #[cfg(test)]
 mod test {
-    use std::{arch::x86_64::{ __m512i, _mm512_sllv_epi32}, simd::Simd, sync::Arc};
+    use std::sync::Arc;
 
-    use datafusion::{arrow::{datatypes::{Schema, Field, DataType, UInt8Type}, array::{UInt16Array, BooleanArray, GenericListArray}}, from_slice::FromSlice};
+    use datafusion::{arrow::{datatypes::{Schema, Field, DataType, UInt8Type}, array::{UInt16Array, BooleanArray, GenericListArray, ArrayRef}}, from_slice::FromSlice};
 
-    use super::{BatchRange, PostingBatch, Freqs};
-
-    unsafe fn test_simd() -> __m512i {
-        // let position: __m512i = __m512i::from(Simd::from([1, 3,5,7, 12, 16, 20, 22, 27, 29, 30, 33, 39, 44, 49, 66] as [u32;16]));
-        let position: __m512i = __m512i::from(Simd::from([1,3,5,0,0,0,0,0,0,0,0,0,0,0,0,0] as [u32;16]));
-        let ones8: __m512i = __m512i::from(Simd::from([u32::MAX; 16]));
-        let res = _mm512_sllv_epi32(ones8, position);
-        return res;
-    }
-
-    #[test]
-    fn test_print() {
-        let res: Simd<u64,8> = unsafe {
-            test_simd()
-        }.into();
-        let res = res.as_array();
-        for i in res {
-            print!("{:#b} ", *i);
-        }
-        panic!("");
-    }
+    use super::{BatchRange, PostingBatch};
 
     fn build_batch() -> PostingBatch {
         let schema = Arc::new(Schema::new(vec![
@@ -472,7 +517,7 @@ mod test {
             end: 64,
             nums32: 1
         });
-        let postings = vec![
+        let postings: Vec<ArrayRef> = vec![
            Arc::new(UInt16Array::from_slice([1, 6, 9])),
            Arc::new(UInt16Array::from_slice([0, 4, 16])),
            Arc::new(UInt16Array::from_slice([4, 6, 8])),
@@ -495,7 +540,7 @@ mod test {
             end: 64,
             nums32: 1
         });
-        let postings = vec![
+        let postings: Vec<ArrayRef> = vec![
            Arc::new(UInt16Array::from_slice([1, 6, 9])),
            Arc::new(UInt16Array::from_slice([0, 4, 16])),
            Arc::new(UInt16Array::from_slice([4, 6, 8])),
@@ -588,25 +633,5 @@ mod test {
         println!("res: {:?}", res);
         assert_eq!(res.column(0).as_any().downcast_ref::<BooleanArray>().unwrap(), &exptected1);
         assert_eq!(res.column(1).as_any().downcast_ref::<BooleanArray>().unwrap(), &exptected2);
-    }
-
-    #[test]
-    fn extract_freqs() {
-        let freqs = Freqs {
-            freqs: [
-                vec![1, 2, 3],
-                vec![4, 5],
-                vec![6, 7, 8, 9],
-                vec![10, 11],
-            ],
-        };
-        let masks = [
-            0b101 as u64,
-            0b00 as u64,
-            0b1101 as u64,
-            0b1 as u64,
-        ];
-        let res = freqs.extract_freqs(&masks);
-        assert_eq!(res, vec![1, 3, 6, 8, 9, 10]);
     }
 }

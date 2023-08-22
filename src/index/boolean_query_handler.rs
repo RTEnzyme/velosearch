@@ -124,7 +124,7 @@ impl HandlerT for BooleanQueryHandler {
             // let predicate = BooleanPredicateBuilder::must(&[&keys[0], &keys[1]])?.build();
             let predicate = BooleanPredicateBuilder::must(&["FIRST", "TIME"])?.build();
             handlers.push(tokio::spawn(async move {
-                bq.boolean_predicate(predicate).unwrap()
+                bq.boolean_predicate(predicate, false).unwrap()
                 .explain(true, true).unwrap()
                 .show().await.unwrap();
                 // .collect().await.unwrap();
