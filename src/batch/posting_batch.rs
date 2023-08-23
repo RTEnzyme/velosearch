@@ -200,12 +200,13 @@ impl PostingBatch {
         fields.append(&mut freqs);
         let mut freqs: Vec<ArrayRef> = Vec::with_capacity(indices.len());
         let bitmask_size: usize = self.range.len() as usize;
-        let mut batches: Vec<ArrayRef> = Vec::with_capacity(indices.len());
+        let mut batches: Vec<ArrayRef> = Vec::new();
         for idx in indices {
             // Use customized construction for performance
             let mut bitmap = vec![0; bitmask_size / 64];
             if idx.is_none() {
                 batches.push(build_boolean_array(bitmap, bitmask_size));
+                freqs.push(Arc::new(GenericListArray::<i32>::from_iter_primitive::<UInt8Type, _, _>(vec![None as Option<Vec<Option<u8>>>, None, None, None])));
                 continue;
             }
 

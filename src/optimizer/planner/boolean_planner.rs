@@ -168,7 +168,7 @@ impl BooleanPhysicalPlanner {
                     let partition_predicate = (0..num_partition)
                         .map(|v| (v, runtime_expr.clone()))
                         .collect();
-                    debug!("Finish creating boolean physical plan");
+                    debug!("Finish creating boolean physical plan. Is_score: {}", boolean.is_score);
                     Ok(Arc::new(BooleanExec::try_new(partition_predicate, physical_input, None, boolean.is_score)?))
                 }
                 LogicalPlan::Analyze(a) => {

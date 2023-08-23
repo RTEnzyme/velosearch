@@ -111,7 +111,8 @@ impl std::fmt::Debug for PostingExec {
    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
        write!(f, "partitions: [...]")?;
        write!(f, "schema: {:?}", self.projected_schema)?;
-       write!(f, "projection: {:?}", self.projection)
+       write!(f, "projection: {:?}", self.projection);
+       write!(f, "is_score: {:}", self.is_score)
    } 
 }
 
@@ -174,9 +175,10 @@ impl ExecutionPlan for PostingExec {
                 let partitions: Vec<_> =
                     self.partitions.iter().map(|b| b.len()).collect();
                 write!(f,
-                    "PostingExec: partitions={}, partition_size={:?}",
+                    "PostingExec: partitions={}, partition_size={:?}, is_score: {:}",
                     partitions.len(),
-                    partitions
+                    partitions,
+                    self.is_score,
                 )
             }
         }
@@ -258,6 +260,7 @@ impl PostingStream {
 
         let schema_async = schema.clone();
         let term_async = term_idx.clone();
+        debug!("is_score: {:?}", is_score);
         let valid_data = async move {
             let distr: Vec<UInt16Array> = schema_async.fields().into_iter()
                 .map(|f| f.name())
@@ -278,6 +281,7 @@ impl PostingStream {
                 }
             }
             if is_score {
+                debug!("project fold with freqs");
                 data.as_ref().into_iter()
                     .zip(project_idx.into_iter())
                     .zip(min_range.into_iter())

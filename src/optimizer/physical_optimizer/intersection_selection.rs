@@ -26,17 +26,8 @@ impl PhysicalOptimizerRule for IntersectionSelection {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(_) = plan.as_any().downcast_ref::<BooleanExec>() {
             plan.transform_up(&|p| {
-                if let Some(posting) = p.as_any().downcast_ref::<PostingExec>() {
-                    let input = (*posting).clone();
-                    Ok(Some(Arc::new(
-                        PostingExec::try_new(
-                            input.partitions.to_owned(),
-                            input.term_idx,
-                            input.schema,
-                            input.projection,
-                            input.partition_min_range,
-                        )?
-                    )))
+                if let Some(_) = p.as_any().downcast_ref::<PostingExec>() {
+                    Ok(None)
                 } else if let Some(boolean) = p.as_any().downcast_ref::<BooleanExec>() {
                     let predicates: HashMap<usize, Arc<dyn PhysicalExpr>> = boolean
                     .predicate

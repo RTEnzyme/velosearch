@@ -150,7 +150,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
             debug!("End Pre_visit PostingExec");
             Ok(RewriteRecursion::Continue)
         } else {
-            Ok(RewriteRecursion::Continue)
+            Ok(RewriteRecursion::Stop)
         }
     }
 
@@ -173,13 +173,17 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
         } else if let Some(posting) = node.as_any().downcast_ref::<PostingExec>() {
             debug!("Mutate PostingExec");
             let min_range = self.min_range.take();
-            Ok(Arc::new(PostingExec::try_new(
+            let mut exec = PostingExec::try_new(
                 posting.partitions.to_owned(),
                 posting.term_idx.to_owned(),
                 posting.schema.to_owned(),
                 posting.projection.to_owned(),
                 min_range,
-            )?))
+            )?;
+            debug!("is_score: {}", self.is_score);
+            exec.is_score = self.is_score;
+            let exec = Arc::new(exec);
+            Ok(exec.clone())
         }else {
             Ok(node)
         }
