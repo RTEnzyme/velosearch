@@ -1,5 +1,5 @@
 use super::api::GeneratedFunction;
-use super::ast::{U8, U16, BinaryExpr, Expr, JITType, Literal, Stmt, TypedLit, BOOL, NIL, BooleanExpr, I64};
+use super::ast::{U8, U16, BinaryExpr, Expr, JITType, Literal, Stmt, TypedLit, BOOL, NIL, BooleanExpr, I64, Boolean, Predicate};
 use crate::utils::{Result, FastErr};
 use cranelift::prelude::*;
 use cranelift_jit::{JITBuilder, JITModule};
@@ -286,6 +286,7 @@ impl<'a> FunctionTranslator<'a> {
             }
             Expr::Binary(b) => self.translate_binary_expr(b),
             Expr::BooleanExpr(b) => self.translate_boolean_expr(b),
+            Expr::Boolean(b) => self.translate_boolean(b.predicate),
             Expr::Call(name, args, ret) => self.translate_call_expr(name, args, ret),
             Expr::Load(ptr, ty) => self.translate_deref(*ptr, ty),
         }
@@ -296,6 +297,105 @@ impl<'a> FunctionTranslator<'a> {
             Literal::Parsing(literal, ty) => self.translate_string_lit(literal, ty),
             Literal::Typed(lt) => Ok(self.translate_typed_lit(lt)),
         }
+    }
+
+    fn translate_boolean(&mut self, predicate: Predicate) -> Result<Value> {
+        let offset = self.translate_expr(Expr::Identifier(format!("offset"), I64))?;
+        let offset = self.builder.ins().imul_imm(offset, 8);
+        let value_base = self.translate_expr(Expr::Identifier(format!("batch"), I64))?;
+        let mut init_v = self.translate_expr(Expr::Identifier(format!("init_v"), I64))?;
+
+        match predicate {
+            Predicate::And { args } => {
+                let mut body_block;
+                let else_block = self.builder.create_block();
+                self.builder.append_block_param(else_block, U8.native);
+                for expr in args {
+                    init_v = self.translate_predicate(&expr,  offset, value_base, init_v)?;
+                    body_block = self.builder.create_block();
+                    self.builder.append_block_param(body_block, U8.native);
+                    self.builder.ins().brif(
+                        init_v,
+                        body_block,
+                        &[init_v],
+                        else_block,
+                        &[init_v],
+                    );
+                    self.builder.switch_to_block(body_block);
+                    self.builder.seal_block(body_block);
+                }
+                self.builder.ins().jump(else_block, &[init_v]);
+                self.builder.switch_to_block(else_block);
+                self.builder.seal_block(else_block);
+                Ok(self.builder.block_params(else_block)[0])
+            }
+            Predicate::Or { .. } => {
+                Err(FastErr::JitErr(format!("The top level of predicate must be `AND`.")))
+            }
+            Predicate::Leaf { idx } => {
+                let v = self.translate_predicate(&Predicate::Leaf { idx },  offset, value_base, init_v)?;
+                Ok(v)
+            }
+        }
+    }
+
+    fn translate_predicate(
+        &mut self,
+        predicate: &Predicate,
+        offset: Value,
+        value_base: Value,
+        init_v: Value,
+    ) -> Result<Value> {
+        let mut init_v = init_v;
+        match predicate {
+            Predicate::And { args } => {
+                let mut body_block;
+                let else_block = self.builder.create_block();
+                self.builder.append_block_param(else_block, U8.native);
+                for expr in args {
+                    init_v = self.translate_predicate(&expr, offset, value_base, init_v)?;
+                    body_block = self.builder.create_block();
+                    self.builder.append_block_param(body_block, U8.native);
+                    self.builder.ins().brif(
+                        init_v,
+                        body_block,
+                        &[init_v],
+                        else_block,
+                        &[init_v],
+                    );
+                    self.builder.switch_to_block(body_block);
+                    self.builder.seal_block(body_block);
+                }
+                self.builder.ins().jump(else_block, &[init_v]);
+                self.builder.switch_to_block(else_block);
+                self.builder.seal_block(else_block);
+                Ok(self.builder.block_params(else_block)[0])
+
+            }
+            Predicate::Or { args } => {
+                let values: Vec<Value> = args.into_iter()
+                    .map(|v| {
+                        self.translate_predicate(predicate, offset, value_base, init_v)
+                    })
+                    .collect::<Result<_>>()?;
+                Ok(values.into_iter()
+                    .reduce(|l, r| self.builder.ins().bor(l, r))
+                    .unwrap())
+            }
+            Predicate::Leaf { idx } => {
+                Ok(self.get_leaf_value(*idx, offset, value_base))
+            }
+        }
+    }
+
+    #[inline]
+    fn get_leaf_value(&mut self, num: usize, offset: Value, value_base: Value) -> Value {
+        let v = self.translate_expr(Expr::Identifier(format!("p{num}"), I64)).unwrap();
+        let value_off = self.builder.ins().imul_imm(v, 8);
+        let value_off = self.builder.ins().iadd(value_base, value_off);
+        let vlaue_ptr = self.builder.ins().load(I64.native, MemFlags::new().with_readonly(), value_off, 0);
+        let ptr = self.builder.ins().iadd(vlaue_ptr, offset);
+        self.builder.ins().load(U8.native, MemFlags::new().with_readonly(), ptr, 0)
     }
 
     fn translate_boolean_expr(&mut self, expr: BooleanExpr) -> Result<Value> {

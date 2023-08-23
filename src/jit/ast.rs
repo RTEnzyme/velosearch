@@ -122,7 +122,9 @@ pub enum Expr {
     /// Load a value from pointer
     Load(Box<Expr>, JITType),
     /// Boolean Expression
-    BooleanExpr(BooleanExpr)
+    BooleanExpr(BooleanExpr),
+    /// Boolean Expression V2
+    Boolean(Boolean),
 }
 
 impl Expr {
@@ -134,6 +136,7 @@ impl Expr {
             Expr::Call(_, _, ty) => *ty,
             Expr::Load(_, ty) => *ty,
             Expr::BooleanExpr(b) => b.get_type(),
+            Expr::Boolean(b) => b.get_type(),
         }
     }
 }
@@ -145,6 +148,7 @@ impl Display for Expr {
             Expr::Identifier(name, _) => write!(f, "{name}"),
             Expr::Binary(be) => write!(f, "{be}"),
             Expr::BooleanExpr(b) => write!(f, "{b}"),
+            Expr::Boolean(b) => write!(f, "{b}"),
             Expr::Call(name, exprs, _) => {
                 write!(
                     f,
@@ -304,9 +308,27 @@ impl Display for BinaryExpr {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Dnf {
-    Not(Expr),
-    Normal(Expr),
+pub enum Predicate {
+    And { args: Vec<Predicate> },
+    Or { args: Vec<Predicate> },
+    Leaf { idx: usize },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Boolean {
+    pub predicate: Predicate,
+}
+
+impl Boolean {
+    fn get_type(&self) -> JITType {
+        U8
+    }
+}
+
+impl Display for Boolean {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "eval({:?})", self.predicate)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

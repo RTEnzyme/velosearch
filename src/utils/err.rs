@@ -21,7 +21,9 @@ pub enum FastErr {
     #[fail(display = "InternalErr: {}", _0)]
     InternalErr(String),
     #[fail(display = "TantivyErr: {}", _0)]
-    TantivyErr(#[cause] TantivyError)
+    TantivyErr(#[cause] TantivyError),
+    #[fail(display = "JitErr: {}", _0)]
+    JitErr(String),
 }
 
 impl From<serde_json::Error> for FastErr {
