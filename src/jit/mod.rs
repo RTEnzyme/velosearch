@@ -8,7 +8,10 @@ use std::sync::Arc;
 pub use compile::create_boolean_query_fn;
 use lazy_static::lazy_static;
 
-use crate::jit::{api::Assembler, ast::{Expr, BooleanExpr}, compile::build_boolean_query};
+pub use crate::jit::{api::Assembler, ast::{Expr, Boolean, BooleanExpr}, compile::build_boolean_query};
+use crate::utils::Result;
+
+use self::compile::jit_short_circuit_primitive;
 
 pub struct PrecompiledBooleanEval {
     func: fn(*const *const u8, *const i64, *const u8, i64) -> (),
@@ -52,6 +55,18 @@ lazy_static!(
         func_vec
     };
 );
+
+pub fn jit_short_circuit(expr: Boolean, leaf_num: usize) -> Result<fn(*const *const u8, *const u8, *const u8, i64)> {
+    let assembler = Assembler::default();
+    let gen_func = jit_short_circuit_primitive(&assembler, expr, leaf_num)?;
+
+    let mut jit = assembler.create_jit();
+    let gen_func = jit.compile(gen_func)?;
+    let code_fn = unsafe {
+        core::mem::transmute::<_, fn(*const *const u8, *const u8, *const u8, i64)->()>(gen_func)
+    };
+    Ok(code_fn)
+}
 
 #[cfg(test)]
 mod test {

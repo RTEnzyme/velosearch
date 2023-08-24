@@ -5,6 +5,7 @@ use fastfull_search::{Result, FastArgs, Handler};
 use fastfull_search::index::handler::HandlerT;
 use tracing::{info, Level};
 
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt().with_max_level(Level::DEBUG).init();
     info!("main execution");

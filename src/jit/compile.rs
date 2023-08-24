@@ -6,7 +6,7 @@ use datafusion::physical_plan::expressions::Dnf as DDnf;
 use datafusion::physical_expr::BooleanQueryEvalFunc;
 
 use crate::utils::Result;
-use super::BOOLEAN_EVAL_FUNC;
+use super::{BOOLEAN_EVAL_FUNC, Boolean};
 use super::api::Assembler;
 use super::ast::JITType;
 use super::{
@@ -161,9 +161,10 @@ pub fn build_boolean_query(
 
 pub fn jit_short_circuit_primitive(
     assembler: &Assembler,
-    jit_expr: JITExpr,
+    jit_expr: Boolean,
     leaf_num: usize,
 ) -> Result<GeneratedFunction> {
+    let jit_expr = JITExpr::Boolean(jit_expr);
     // Alias pointer type.
     // The raw pointer `R64` or `R32` is not compatible with integers
     const PTR_TYPE: JITType = I64;
@@ -249,7 +250,7 @@ mod test {
     #[test]
     fn boolean_query_v2_simple() {
         tracing_subscriber::fmt().with_max_level(Level::DEBUG).init();
-        let jit_expr = Expr::Boolean(Boolean {
+        let jit_expr = Boolean {
             predicate: Predicate::And { 
                 args: vec![
                     Predicate::Leaf { idx: 0 },
@@ -260,7 +261,7 @@ mod test {
                     Predicate::Leaf { idx: 3 },
                 ] 
             }
-        });
+        };
         // allocate memory for result
         let result: Vec<u8> = vec![0x0; 2];
         let test1 = vec![0x01, 0x0];
@@ -293,7 +294,7 @@ mod test {
     #[test]
     fn boolean_query_nested() {
         tracing_subscriber::fmt().with_max_level(Level::DEBUG).init();
-        let jit_expr = Expr::Boolean(Boolean {
+        let jit_expr = Boolean {
             predicate: Predicate::And { 
                 args: vec![
                     Predicate::Leaf { idx: 0 },
@@ -306,7 +307,7 @@ mod test {
                     ] },
                 ] 
             }
-        });
+        };
         // allocate memory for result
         let result: Vec<u8> = vec![0x0; 2];
         let test1 = vec![0x31, 0x0];

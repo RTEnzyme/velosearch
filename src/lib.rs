@@ -13,11 +13,14 @@ pub mod jit;
 pub mod query;
 pub mod context;
 pub mod batch;
+pub mod physical_expr;
 pub use utils::Result;
 pub use context::BooleanContext;
 pub use optimizer::{BooleanPhysicalPlanner, IntersectionSelection, MinOperationRange, PartitionPredicateReorder, RewriteBooleanPredicate};
-
+pub use physical_expr::ShortCircuit;
 use clap::{Parser, ValueEnum};
+
+const JIT_MAX_NODES: usize = 8;
 
 #[derive(Parser, Debug)]
 pub struct FastArgs {
