@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::cmp::max;
-
 use datafusion::{
     optimizer::{OptimizerRule, OptimizerConfig, optimizer::ApplyOrder},
     logical_expr::{LogicalPlan, logical_plan::Boolean, BooleanQuery, Operator},
@@ -136,11 +134,10 @@ impl OptimizerRule for RewriteBooleanPredicate {
                 let mut expr_cnt = 0;
                 let mut op_cnt = 0;
                 let predicate = predicate(&boolean.predicate, (&mut expr_cnt, &mut op_cnt))?;
-                let rewritten_predicate = rewrite_predicate(predicate, 0);
-                let rewritten_expr = normalize_predicate(rewritten_predicate.0);
+                let rewritten_predicate = rewrite_predicate(predicate);
+                let rewritten_expr = normalize_predicate(rewritten_predicate);
                 Ok(Some(LogicalPlan::Boolean(Boolean::try_new(
                     rewritten_expr,
-                    rewritten_predicate.1,
                     expr_cnt,
                     op_cnt,
                     boolean.is_score,
@@ -211,35 +208,31 @@ fn normalize_predicate(predicate: Predicate) -> Expr {
     }
 }
 
-fn rewrite_predicate(predicate: Predicate, height: usize) -> (Predicate, usize) {
+fn rewrite_predicate(predicate: Predicate) -> Predicate {
     match predicate {
         Predicate::And { args } => {
             let mut rewritten_args = Vec::with_capacity(args.len());
-            let mut max_height = 0;
             for arg in args.iter() {
-                let rewritten = rewrite_predicate(arg.clone(), height + 1);
-                rewritten_args.push(rewritten.0);
-                max_height = max(height, rewritten.1);
+                let rewritten = rewrite_predicate(arg.clone());
+                rewritten_args.push(rewritten);
             }
             rewritten_args = flatten_and_predicates(rewritten_args);
-            (Predicate::And {
+            Predicate::And {
                 args: rewritten_args,
-            }, max_height)
+            }
         }
         Predicate::Or { args } => {
             let mut rewritten_args = vec![];
-            let mut max_height = 0;
             for arg in args.iter() {
-                let rewriten = rewrite_predicate(arg.clone(), height + 1);
-                rewritten_args.push(rewriten.0);
-                max_height = max(max_height, rewriten.1);
+                let rewriten = rewrite_predicate(arg.clone());
+                rewritten_args.push(rewriten);
             }
             rewritten_args = flatten_or_predicates(rewritten_args);
-            (delete_duplicate_predicates(&rewritten_args), max_height)
+            delete_duplicate_predicates(&rewritten_args)
         }
-        Predicate::Other { expr } => (Predicate::Other {
+        Predicate::Other { expr } => Predicate::Other {
             expr: Box::new(*expr),
-        }, height),
+        },
     }
 }
 

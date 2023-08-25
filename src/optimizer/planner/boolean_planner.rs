@@ -140,25 +140,21 @@ impl BooleanPhysicalPlanner {
                             right: predicate.right.clone(),
                         }), input_dfschema, &input_schema, session_state)?;
                         // If the height of predicate is large than 5, choose Vectorized Boolean Query
-                        if boolean.height > 5 {
-                            boolean_query(binary_expr, &input_schema)
-                        } else {
-                            debug!("Using code_gen");
-                            let schema = boolean.input.schema();
-                            let inputs: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-                            let term2idx: HashMap<&str, i64> = inputs
-                                .into_iter()
-                                .enumerate()
-                                .map(|(i, s)| (s, i as i64))
-                                .collect(); 
-                            let mut cnf_predicates = CnfPredicate::new(
-                                &predicate,
-                                term2idx,
-                            );
-                            cnf_predicates.flatten_cnf_predicate();
-                            let cnf_predicates = cnf_predicates.collect();
-                            boolean_query_with_cnf(cnf_predicates, binary_expr, &input_schema)
-                        }
+                        debug!("Using code_gen");
+                        let schema = boolean.input.schema();
+                        let inputs: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+                        let term2idx: HashMap<&str, i64> = inputs
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, s)| (s, i as i64))
+                            .collect(); 
+                        let mut cnf_predicates = CnfPredicate::new(
+                            &predicate,
+                            term2idx,
+                        );
+                        cnf_predicates.flatten_cnf_predicate();
+                        let cnf_predicates = cnf_predicates.collect();
+                        boolean_query_with_cnf(cnf_predicates, binary_expr, &input_schema)
                     } else {
                         unreachable!()
                     }?;
