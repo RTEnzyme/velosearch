@@ -128,7 +128,7 @@ impl BooleanPhysicalPlanner {
                     let input_schema = physical_input.as_ref().schema();
                     let input_dfschema = boolean.input.schema();
                     debug!("Create boolean predicate");
-                    let runtime_expr = if let Expr::BooleanQuery(ref predicate) = boolean.predicate {
+                    let runtime_expr = if let Expr::BooleanQuery(ref predicate) = boolean.binary_expr {
                         let op = match predicate.op {
                             Operator::BitwiseAnd => Operator::And,
                             Operator::BitwiseOr => Operator::Or,

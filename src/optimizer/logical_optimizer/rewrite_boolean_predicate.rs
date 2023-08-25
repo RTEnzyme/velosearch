@@ -17,7 +17,7 @@
 
 use datafusion::{
     optimizer::{OptimizerRule, OptimizerConfig, optimizer::ApplyOrder},
-    logical_expr::{LogicalPlan, logical_plan::Boolean, BooleanQuery, Operator},
+    logical_expr::{LogicalPlan, logical_plan::{Boolean, Predicate}, BooleanQuery, Operator},
     prelude::Expr, error::DataFusionError, common::Result,
 };
 
@@ -131,15 +131,14 @@ impl OptimizerRule for RewriteBooleanPredicate {
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Boolean(boolean) => {
-                let mut expr_cnt = 0;
-                let mut op_cnt = 0;
-                let predicate = predicate(&boolean.predicate, (&mut expr_cnt, &mut op_cnt))?;
-                let rewritten_predicate = rewrite_predicate(predicate);
-                let rewritten_expr = normalize_predicate(rewritten_predicate);
-                Ok(Some(LogicalPlan::Boolean(Boolean::try_new(
+                let predicate = predicate(&boolean.binary_expr)?;
+                let rewritten_predicate = rewrite_predicate(predicate.0);
+                let rewritten_expr = normalize_predicate(rewritten_predicate.clone().0);
+                Ok(Some(LogicalPlan::Boolean(Boolean::try_new_with_predicate(
                     rewritten_expr,
-                    expr_cnt,
-                    op_cnt,
+                    Some(rewritten_predicate.0),
+                    rewritten_predicate.3,
+                    rewritten_predicate.2,
                     boolean.is_score,
                     boolean.input.clone(),
                 )?)))
@@ -157,33 +156,29 @@ impl OptimizerRule for RewriteBooleanPredicate {
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
-enum Predicate {
-    And { args: Vec<Predicate> },
-    Or { args: Vec<Predicate> },
-    Other { expr: Box<Expr> },
-}
 
-fn predicate(expr: &Expr, (expr_cnt, op_cnt): (&mut usize, &mut usize)) -> Result<Predicate> {
+
+fn predicate(expr: &Expr) -> Result<(Predicate, f64, usize, usize)> {
     match expr {
     Expr::BooleanQuery(BooleanQuery {left, op, right }) => match op {
             Operator::BitwiseAnd => {
-                *op_cnt += 1;
-                let args = vec![predicate(left, (expr_cnt, op_cnt))?, predicate(right, (expr_cnt, op_cnt))?];
-                Ok(Predicate::And { args })
+                let left = predicate(left)?;
+                let right = predicate(right)?;
+                let args = vec![left, right];
+                Ok((Predicate::And { args }, 0., 0, 0))
             }
             Operator::BitwiseOr => {
-                *op_cnt += 1;
-                let args = vec![predicate(left, (expr_cnt, op_cnt))?, predicate(right, (expr_cnt, op_cnt))?];
-                Ok(Predicate::Or { args })
+                let left = predicate(left)?;
+                let right = predicate(right)?;
+                let args = vec![left, right];
+                Ok((Predicate::Or { args }, 0., 0, 0))
             }
             _ => Err(DataFusionError::Internal(format!("Don't support op: {:}", op))),
         },
         _ => {
-            *expr_cnt += 1; 
-            Ok(Predicate::Other {
+            Ok((Predicate::Other {
                 expr: Box::new(expr.clone()),
-            })
+            }, 0., 0, 0))
         }
     }
 }
@@ -193,14 +188,14 @@ fn normalize_predicate(predicate: Predicate) -> Expr {
         Predicate::And { args } => {
             assert!(args.len() >= 2);
             args.into_iter()
-                .map(normalize_predicate)
+                .map(|v| normalize_predicate(v.0))
                 .reduce(Expr::boolean_and)
                 .expect("had more than one arg")
         }
         Predicate::Or { args } => {
             assert!(args.len() >= 2);
             args.into_iter()
-                .map(normalize_predicate)
+                .map(|v| normalize_predicate(v.0))
                 .reduce(Expr::boolean_or)
                 .expect("had more than one arg")
         }
@@ -208,40 +203,49 @@ fn normalize_predicate(predicate: Predicate) -> Expr {
     }
 }
 
-fn rewrite_predicate(predicate: Predicate) -> Predicate {
+fn rewrite_predicate(predicate: Predicate) -> (Predicate, f64, usize, usize) {
+    let mut node_num = 0;
+    let mut leaf_num = 0;
     match predicate {
         Predicate::And { args } => {
-            let mut rewritten_args = Vec::with_capacity(args.len());
-            for arg in args.iter() {
-                let rewritten = rewrite_predicate(arg.clone());
+            let flatten_args = flatten_and_predicates(args.clone());
+            let mut rewritten_args = vec![];
+            for arg in flatten_args {
+                let rewritten = rewrite_predicate(arg.0);
+                node_num += rewritten.2;
+                leaf_num += rewritten.3;
                 rewritten_args.push(rewritten);
             }
-            rewritten_args = flatten_and_predicates(rewritten_args);
-            Predicate::And {
+            (Predicate::And {
                 args: rewritten_args,
-            }
+            }, 0., node_num + 1, leaf_num)
         }
         Predicate::Or { args } => {
+            let flatten_args = flatten_or_predicates(args);
             let mut rewritten_args = vec![];
-            for arg in args.iter() {
-                let rewriten = rewrite_predicate(arg.clone());
+            for arg in flatten_args {
+                let rewriten = rewrite_predicate(arg.0.clone());
+                node_num += rewriten.2;
+                leaf_num += rewriten.3;
                 rewritten_args.push(rewriten);
             }
-            rewritten_args = flatten_or_predicates(rewritten_args);
-            delete_duplicate_predicates(&rewritten_args)
+            // delete_duplicate_predicates(&rewritten_args)
+            (Predicate::Or {
+                args: rewritten_args,
+            }, 0., node_num + 1, leaf_num)
         }
-        Predicate::Other { expr } => Predicate::Other {
+        Predicate::Other { expr } => (Predicate::Other {
             expr: Box::new(*expr),
-        },
+        }, 0., 1, 1),
     }
 }
 
 fn flatten_and_predicates(
-    and_predicates: impl IntoIterator<Item = Predicate>,
-) -> Vec<Predicate> {
+    and_predicates: impl IntoIterator<Item = (Predicate, f64, usize, usize)>,
+) -> Vec<(Predicate, f64, usize, usize)> {
     let mut flattened_predicates = vec![];
     for predicate in and_predicates {
-        match predicate {
+        match predicate.0 {
             Predicate::And { args } => {
                 flattened_predicates
                     .extend_from_slice(flatten_and_predicates(args).as_slice());
@@ -255,11 +259,11 @@ fn flatten_and_predicates(
 }
 
 fn flatten_or_predicates(
-    or_predicates: impl IntoIterator<Item = Predicate>,
-) -> Vec<Predicate> {
+    or_predicates: impl IntoIterator<Item = (Predicate, f64, usize, usize)>,
+) -> Vec<(Predicate, f64, usize, usize)> {
     let mut flattened_predicates = vec![];
     for predicate in or_predicates {
-        match predicate {
+        match predicate.0 {
             Predicate::Or { args } => {
                 flattened_predicates
                     .extend_from_slice(flatten_or_predicates(args).as_slice());
@@ -272,89 +276,116 @@ fn flatten_or_predicates(
     flattened_predicates
 }
 
-fn delete_duplicate_predicates(or_predicates: &[Predicate]) -> Predicate {
-    let mut shortest_exprs: Vec<Predicate> = vec![];
-    let mut shortest_exprs_len = 0;
-    // choose the shortest AND predicate
-    for or_predicate in or_predicates.iter() {
-        match or_predicate {
-            Predicate::And { args } => {
-                let args_num = args.len();
-                if shortest_exprs.is_empty() || args_num < shortest_exprs_len {
-                    shortest_exprs = (*args).clone();
-                    shortest_exprs_len = args_num;
-                }
-            }
-            _ => {
-                // if there is no AND predicate, it must be the shortest expression.
-                shortest_exprs = vec![or_predicate.clone()];
-                break;
-            }
-        }
+// fn delete_duplicate_predicates(or_predicates: &[(Predicate, f64, usize)]) -> Predicate {
+//     let mut shortest_exprs: Vec<(Predicate, f64, usize)> = vec![];
+//     let mut shortest_exprs_len = 0;
+//     // choose the shortest AND predicate
+//     for or_predicate in or_predicates.iter() {
+//         match or_predicate.0 {
+//             Predicate::And { args } => {
+//                 let args_num = args.len();
+//                 if shortest_exprs.is_empty() || args_num < shortest_exprs_len {
+//                     shortest_exprs = args.clone();
+//                     shortest_exprs_len = args_num;
+//                 }
+//             }
+//             _ => {
+//                 // if there is no AND predicate, it must be the shortest expression.
+//                 shortest_exprs = vec![or_predicate.clone()];
+//                 break;
+//             }
+//         }
+//     }
+
+//     // dedup shortest_exprs
+//     shortest_exprs.dedup();
+
+//     // Check each element in shortest_exprs to see if it's in all the OR arguments.
+//     let mut exist_exprs: Vec<Predicate> = vec![];
+//     for expr in shortest_exprs.iter() {
+//         let found = or_predicates.iter().all(|or_predicate| match or_predicate.0 {
+//             Predicate::And { args } => args.contains(expr),
+//             _ => or_predicate == expr,
+//         });
+//         if found {
+//             exist_exprs.push(expr.0.clone());
+//         }
+//     }
+//     if exist_exprs.is_empty() {
+//         return Predicate::Or {
+//             args: or_predicates.to_vec(),
+//         };
+//     }
+
+//     // Rebuild the OR predicate.
+//     // (A AND B) OR A will be optimized to A.
+//     let mut new_or_predicates = vec![];
+//     for or_predicate in or_predicates.iter() {
+//         match or_predicate.0 {
+//             Predicate::And { args } => {
+//                 let mut new_args = args.clone();
+//                 new_args.retain(|expr| !exist_exprs.contains(expr));
+//                 if !new_args.is_empty() {
+//                     if new_args.len() == 1 {
+//                         new_or_predicates.push(new_args[0].clone());
+//                     } else {
+//                         new_or_predicates.push(Predicate::And { args: new_args });
+//                     }
+//                 } else {
+//                     new_or_predicates.clear();
+//                     break;
+//                 }
+//             }
+//             _ => {
+//                 if exist_exprs.contains(or_predicate) {
+//                     new_or_predicates.clear();
+//                     break;
+//                 }
+//             }
+//         }
+//     }
+//     if !new_or_predicates.is_empty() {
+//         if new_or_predicates.len() == 1 {
+//             exist_exprs.push(new_or_predicates[0].clone());
+//         } else {
+//             exist_exprs.push(Predicate::Or {
+//                 args: flatten_or_predicates(new_or_predicates),
+//             });
+//         }
+//     }
+
+//     if exist_exprs.len() == 1 {
+//         exist_exprs[0].clone()
+//     } else {
+//         Predicate::And {
+//             args: flatten_and_predicates(exist_exprs),
+//         }
+//     }
+// }
+
+#[cfg(test)]
+mod tests {
+    use datafusion::prelude::{col, boolean_and, boolean_or, Expr};
+
+    use super::{predicate, rewrite_predicate};
+
+    fn build_expr() -> Expr{
+        let boolean_or = boolean_or(col("3"), col("2"));
+        let boolean_expr = boolean_and(col("1"), boolean_or);
+        boolean_and(col("4"), boolean_expr)
+    }
+    #[test]
+    fn test_predicate() {
+        let boolean_expr = build_expr();
+        predicate(&boolean_expr).unwrap();
     }
 
-    // dedup shortest_exprs
-    shortest_exprs.dedup();
-
-    // Check each element in shortest_exprs to see if it's in all the OR arguments.
-    let mut exist_exprs: Vec<Predicate> = vec![];
-    for expr in shortest_exprs.iter() {
-        let found = or_predicates.iter().all(|or_predicate| match or_predicate {
-            Predicate::And { args } => args.contains(expr),
-            _ => or_predicate == expr,
-        });
-        if found {
-            exist_exprs.push((*expr).clone());
-        }
-    }
-    if exist_exprs.is_empty() {
-        return Predicate::Or {
-            args: or_predicates.to_vec(),
-        };
-    }
-
-    // Rebuild the OR predicate.
-    // (A AND B) OR A will be optimized to A.
-    let mut new_or_predicates = vec![];
-    for or_predicate in or_predicates.iter() {
-        match or_predicate {
-            Predicate::And { args } => {
-                let mut new_args = (*args).clone();
-                new_args.retain(|expr| !exist_exprs.contains(expr));
-                if !new_args.is_empty() {
-                    if new_args.len() == 1 {
-                        new_or_predicates.push(new_args[0].clone());
-                    } else {
-                        new_or_predicates.push(Predicate::And { args: new_args });
-                    }
-                } else {
-                    new_or_predicates.clear();
-                    break;
-                }
-            }
-            _ => {
-                if exist_exprs.contains(or_predicate) {
-                    new_or_predicates.clear();
-                    break;
-                }
-            }
-        }
-    }
-    if !new_or_predicates.is_empty() {
-        if new_or_predicates.len() == 1 {
-            exist_exprs.push(new_or_predicates[0].clone());
-        } else {
-            exist_exprs.push(Predicate::Or {
-                args: flatten_or_predicates(new_or_predicates),
-            });
-        }
-    }
-
-    if exist_exprs.len() == 1 {
-        exist_exprs[0].clone()
-    } else {
-        Predicate::And {
-            args: flatten_and_predicates(exist_exprs),
-        }
+    #[test]
+    fn test_rewrite() {
+        let boolean_expr = build_expr();
+        let predicate = predicate(&boolean_expr).unwrap();
+        let res = rewrite_predicate(predicate.0);
+        assert_eq!(res.2, 6); // node num should be 6.
+        assert_eq!(res.3, 4); // leaf num should be 4.
     }
 }

@@ -203,7 +203,7 @@ impl PostingBatch {
         let mut batches: Vec<ArrayRef> = Vec::new();
         for idx in indices {
             // Use customized construction for performance
-            let mut bitmap = vec![0; bitmask_size / 64];
+            let mut bitmap = vec![0; 8];
             if idx.is_none() {
                 batches.push(build_boolean_array(bitmap, bitmask_size));
                 freqs.push(Arc::new(GenericListArray::<i32>::from_iter_primitive::<UInt8Type, _, _>(vec![None as Option<Vec<Option<u8>>>, None, None, None])));
@@ -212,36 +212,35 @@ impl PostingBatch {
 
             // Safety: If idx is none, this loop will continue before this unwrap_unchecked()
             let idx = unsafe { idx.unwrap_unchecked() };
-            let posting = self.postings.get(idx).cloned().ok_or_else(|| {
-                FastErr::InternalErr(format!(
-                    "project index {} out of bounds, max field {}",
-                    idx,
-                    self.postings.len(),
-                ))
-            })?;
-            match posting.data_type() {
-                DataType::Boolean => batches.push(posting.clone()),
-                DataType::UInt16 => {
-                    posting.as_any()
-                    .downcast_ref::<UInt16Array>()
-                    .unwrap()
-                    .iter()
-                    .for_each(|v| {
-                        let v = v.unwrap();
-                        bitmap[v as usize >> 6] |= 1 << (v % 64) as usize;
-                    });
-                    batches.push(build_boolean_array(bitmap, bitmask_size));
+            let posting = self.postings.get(idx).cloned();
+            if let Some(posting) = posting {
+                match posting.data_type() {
+                    DataType::Boolean => batches.push(posting.clone()),
+                    DataType::UInt16 => {
+                        posting.as_any()
+                        .downcast_ref::<UInt16Array>()
+                        .unwrap()
+                        .iter()
+                        .for_each(|v| {
+                            let v = v.unwrap();
+                            bitmap[v as usize >> 6] |= 1 << (v % 64) as usize;
+                        });
+                        batches.push(build_boolean_array(bitmap, bitmask_size));
+                    }
+                    _ => {}
                 }
-                _ => {}
+                // add freqs array
+                freqs.push(self.term_freqs.as_ref().unwrap().get(idx).cloned().ok_or_else(|| {
+                    FastErr::InternalErr(format!(
+                        "freqs index {} out of bounds, term_freq is none: {}",
+                        idx,
+                        self.term_freqs.is_none(),
+                    ))
+                })?);
+            } else {
+                batches.push(build_boolean_array(bitmap, bitmask_size));
+                freqs.push(Arc::new(GenericListArray::<i32>::from_iter_primitive::<UInt8Type, _, _>(vec![None as Option<Vec<Option<u8>>>, None, None, None])));
             }
-            // add freqs array
-            freqs.push(self.term_freqs.as_ref().unwrap().get(idx).cloned().ok_or_else(|| {
-                FastErr::InternalErr(format!(
-                    "freqs index {} out of bounds, term_freq is none: {}",
-                    idx,
-                    self.term_freqs.is_none(),
-                ))
-            })?);
         }
         batches.insert(projected_schema.index_of("__id__").expect("Should have __id__ field"), Arc::new(UInt32Array::from_slice([])));
         batches.extend(freqs.into_iter());
@@ -321,12 +320,17 @@ impl PostingBatchBuilder {
     }
 
     pub fn push_term(&mut self, term: String, doc_id: u32) -> Result<()> {
+        let off = (doc_id - self.start) as u16;
         let entry = self.term_dict
             .get_mut()
             .map_err(|_| FastErr::InternalErr("Can't acquire the RwLock correctly".to_string()))?
             .entry(term)
-            .or_insert(vec![((doc_id - self.start) as u16, 0)]);
-        unsafe { entry.last_mut().unwrap_unchecked().1 += 1 }
+            .or_insert(vec![(off, 0)]);
+        if entry.last().unwrap().0 ==  off {
+            unsafe { entry.last_mut().unwrap_unchecked().1 += 1 }
+        } else {
+            entry.push((off, 1));
+        }
         self.current = doc_id;
         self.term_num += 1;
         Ok(())

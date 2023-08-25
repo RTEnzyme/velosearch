@@ -14,7 +14,7 @@ use parking_lot::RwLock;
 use tokio::time::Instant;
 use tracing::debug;
 
-use crate::{query::boolean_query::BooleanQuery, utils::FastErr, BooleanPhysicalPlanner, IntersectionSelection, MinOperationRange, PartitionPredicateReorder};
+use crate::{query::boolean_query::BooleanQuery, utils::FastErr, BooleanPhysicalPlanner, IntersectionSelection, MinOperationRange, PartitionPredicateReorder, RewriteBooleanPredicate};
 use crate::utils::Result;
 
 #[derive(Clone)]
@@ -175,7 +175,7 @@ impl BooleanContext {
 fn optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Sync + Send>> {
     vec![
         // Arc::new(SimplifyExpressions::new()),
-        // Arc::new(RewriteBooleanPredicate::new()),
+        Arc::new(RewriteBooleanPredicate::new()),
         // Arc::new(SimplifyExpressions::new()),
         // Arc::new(EliminateFilter::new()),
         // Arc::new(PushDownFilter::new()),
