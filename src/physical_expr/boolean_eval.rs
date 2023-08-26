@@ -1,14 +1,23 @@
 use std::{sync::Arc, any::Any};
 
-use datafusion::{physical_plan::{expressions::BinaryExpr, PhysicalExpr, ColumnarValue}, arrow::{datatypes::{Schema, DataType}, record_batch::RecordBatch, array::BooleanArray}, error::DataFusionError};
+use datafusion::{physical_plan::{expressions::BinaryExpr, PhysicalExpr, ColumnarValue}, arrow::{datatypes::{Schema, DataType}, record_batch::RecordBatch}, error::DataFusionError, common::Result};
 
 use crate::ShortCircuit;
-use crate::utils::Result;
+use crate::utils::array::build_boolean_array;
 
 #[derive(Clone, Debug)]
 pub enum Primitives {
     BitwisePrimitive(BinaryExpr),
     ShortCircuitPrimitive(ShortCircuit)
+}
+
+impl Primitives {
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        match self {
+            Primitives::BitwisePrimitive(b) => b.evaluate(batch),
+            Primitives::ShortCircuitPrimitive(s) => s.evaluate(batch),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -61,8 +70,7 @@ impl PhysicalPredicate {
                     }
                     Primitives::ShortCircuitPrimitive(s) => {
                         if is_and {
-                            s.eval(&mut init_v, batch);
-                            Ok(init_v)
+                            Ok(s.eval(&mut init_v, batch))
                         } else {
                             let mut init_v_or = vec![u8::MAX; init_v.len()];
                             s.eval(&mut init_v_or, batch);
@@ -110,7 +118,22 @@ impl PhysicalExpr for BooleanEvalExpr {
     }
     
     fn evaluate(&self, batch: &RecordBatch) -> datafusion::common::Result<ColumnarValue> {
-        unimplemented!()
+        let batch_len = batch.num_rows();
+        match self.predicate.as_ref() {
+            PhysicalPredicate::And { .. } => {
+                let res = self.predicate.eval(batch, vec![u8::MAX; batch_len], true)?;
+                let array = Arc::new(build_boolean_array(res, batch_len));
+                Ok(ColumnarValue::Array(array))
+            }
+            PhysicalPredicate::Or { .. } => {
+                let res = self.predicate.eval(batch, vec![u8::MAX; batch_len], false)?;
+                let array = Arc::new(build_boolean_array(res, batch_len));
+                Ok(ColumnarValue::Array(array))
+            }
+            PhysicalPredicate::Leaf { primitive } => {
+                primitive.evaluate(batch)
+            }
+        }
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -130,5 +153,95 @@ impl PhysicalExpr for BooleanEvalExpr {
 impl PartialEq<dyn Any> for BooleanEvalExpr {
     fn eq(&self, _other: &dyn Any) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{ptr::NonNull, sync::Arc};
+
+    use datafusion::{arrow::{record_batch::RecordBatch, array::{BooleanArray, ArrayData}, buffer::Buffer, datatypes::{DataType, Schema, Field}}, physical_plan::{expressions::{col, BinaryExpr}, PhysicalExpr}, logical_expr::Operator};
+
+    use crate::{ShortCircuit, jit::ast::Predicate};
+
+    use super::{PhysicalPredicate, Primitives, BooleanEvalExpr};
+
+    #[test]
+    fn test_boolean_eval_simple() {
+        let predicate = Predicate::And {
+            args: vec![
+                Predicate::Or { 
+                    args: vec![
+                        Predicate::Leaf { idx: 0 },
+                        Predicate::Leaf { idx: 1 },
+                    ]
+                },
+                Predicate::Leaf { idx: 2 },
+            ]
+        };
+        let primitive = ShortCircuit::try_new(
+            vec![1, 2, 3],
+            predicate,
+            4,
+            3,
+        ).unwrap();
+        let schema = Arc::new(
+            Schema::new(vec![
+                Field::new("test1", DataType::Boolean, false),
+                Field::new("test2", DataType::Boolean, false),
+                Field::new("test3", DataType::Boolean, false),
+                Field::new("test4", DataType::Boolean, false),
+                Field::new("test5", DataType::Boolean, false),
+                Field::new("__temp__", DataType::Boolean, false),
+            ])
+        );
+        let t1 = vec![0b1010_1110, 0b0011_1010];
+        let t2 = vec![0b1100_0100, 0b1100_1011];
+        let t3 = vec![0b0110_0100, 0b1100_0011];
+        let t4 = vec![0b1011_0000, 0b0111_0110];
+        let t5 = vec![0b1001_0011, 0b1100_0101];
+        let t6 = vec![0b1111_1111, 0b1111_1111];
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(u8_2_boolean(t1.clone())),
+                Arc::new(u8_2_boolean(t2.clone())),
+                Arc::new(u8_2_boolean(t3.clone())),
+                Arc::new(u8_2_boolean(t4.clone())),
+                Arc::new(u8_2_boolean(t5.clone())),
+                Arc::new(u8_2_boolean(t6.clone())),
+            ],
+        ).unwrap();
+
+        let op = |(v1, v2, v3, v4, v5): (u8, u8, u8, u8, u8)| v1 & (v2 | v3) & v4 & v5;
+        let expect: Vec<u8> = (0..2).into_iter()
+            .map(|v| (t1[v], t2[v], t3[v], t4[v], t5[v]))
+            .map(op)
+            .collect();
+        let binary = BinaryExpr::new(col("test1", &schema).unwrap(), Operator::And, col("test5", &schema).unwrap());
+        let physical_predicate = PhysicalPredicate::And {
+            args: vec![
+                PhysicalPredicate::Leaf { primitive: Primitives::BitwisePrimitive(binary) },
+                PhysicalPredicate::Leaf { primitive: Primitives::ShortCircuitPrimitive(primitive) }
+            ]
+        };
+        let res = BooleanEvalExpr::new(Arc::new(physical_predicate)).evaluate(&batch).unwrap().into_array(0);
+        let res = unsafe { res.data().buffers()[0].align_to::<u8>().1 };
+        println!("left: {:b}, right: {:b}", res[0], expect[0]);
+        assert_eq!(res, &expect);
+    }
+
+    fn u8_2_boolean(mut u8s: Vec<u8>) -> BooleanArray {
+        let batch_len = u8s.len() * 8;
+        let value_buffer = unsafe {
+            let buf = Buffer::from_raw_parts(NonNull::new_unchecked(u8s.as_mut_ptr()), u8s.len(), u8s.capacity());
+            std::mem::forget(u8s);
+            buf
+        };
+        let builder = ArrayData::builder(DataType::Boolean)
+            .len(batch_len)
+            .add_buffer(value_buffer);
+        let array_data = builder.build().unwrap();
+        BooleanArray::from(array_data)
     }
 }

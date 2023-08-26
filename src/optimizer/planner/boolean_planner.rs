@@ -10,7 +10,7 @@ use datafusion::{
         logical_expr::{
             LogicalPlan, expr::BooleanQuery, BinaryExpr, PlanType, ToStringifiedPlan, Projection, TableScan, StringifiedPlan, Operator
         },
-        physical_expr::{boolean_query, boolean_query_with_cnf},
+        physical_expr::boolean_query_with_cnf,
         common::DFSchema, arrow::datatypes::{Schema, SchemaRef}, 
         prelude::Expr, physical_expr::execution_props::ExecutionProps, datasource::source_as_provider, 
         physical_optimizer::PhysicalOptimizerRule

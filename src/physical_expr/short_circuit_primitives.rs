@@ -33,8 +33,8 @@ impl ShortCircuit {
         })
     }
 
-    pub fn eval(&self, init_v: &mut Vec<u8>, batch: &RecordBatch) {
-        let batch_len = init_v.len() / 8;
+    pub fn eval(&self, init_v: &mut Vec<u8>, batch: &RecordBatch) -> Vec<u8> {
+        let batch_len = init_v.len();
         let batch: Vec<*const u8> = self.batch_idx
             .iter()
             .map(|v| {
@@ -43,8 +43,9 @@ impl ShortCircuit {
                 }
             })
             .collect();
-        let res: Vec<u8> = vec![0; batch_len];
-        (self.primitive)(batch.as_ptr(), init_v.as_ptr(), init_v.as_ptr(), batch_len as i64);
+        let mut res: Vec<u8> = vec![0; batch_len];
+        (self.primitive)(batch.as_ptr(), init_v.as_ptr(), res.as_ptr(), batch_len as i64);
+        res
     }
 }
 
