@@ -8,7 +8,7 @@ use datafusion::{
         explain::ExplainExec, projection::ProjectionExec, boolean::BooleanExec, displayable, analyze::AnalyzeExec}, 
         execution::context::SessionState, error::{Result, DataFusionError}, 
         logical_expr::{
-            LogicalPlan, expr::BooleanQuery, BinaryExpr, PlanType, ToStringifiedPlan, Projection, TableScan, StringifiedPlan, Operator
+            LogicalPlan, expr::BooleanQuery, BinaryExpr, PlanType, ToStringifiedPlan, Projection, TableScan, StringifiedPlan, Operator, logical_plan::Predicate
         },
         physical_expr::boolean_query_with_cnf,
         common::DFSchema, arrow::datatypes::{Schema, SchemaRef}, 
@@ -17,6 +17,8 @@ use datafusion::{
     };
 use futures::{future::BoxFuture, FutureExt};
 use tracing::{debug, trace};
+
+use crate::physical_expr::boolean_eval::PhysicalPredicate;
 
 /// Boolean physical query planner that converts a
 /// `LogicalPlan` to an `ExecutionPlan` suitable for execution.
@@ -480,6 +482,24 @@ impl<'a> CnfPredicate<'a> {
 
     fn collect(self) -> Vec<Vec<i64>> {
         self.predicates
+    }
+}
+
+struct PhysicalPredicateBuilder<'a> {
+    root: &'a Predicate,
+    physical_predicate: Vec<PhysicalPredicate>,
+    idx: usize,
+    term2idx: HashMap<&'a str, usize>,
+}
+
+impl<'a> PhysicalPredicateBuilder<'a> {
+    fn new(root: &'a Predicate, term2idx: HashMap<&'a str, usize>) -> Self {
+        Self {
+            root,
+            physical_predicate: vec![],
+            idx: 0,
+            term2idx
+        }
     }
 }
 
