@@ -32,6 +32,20 @@ impl ShortCircuit {
             primitive,
         })
     }
+
+    pub fn eval(&self, init_v: &mut Vec<u8>, batch: &RecordBatch) {
+        let batch_len = init_v.len() / 8;
+        let batch: Vec<*const u8> = self.batch_idx
+            .iter()
+            .map(|v| {
+                unsafe {
+                    batch.column(*v).data().buffers()[0].align_to::<u8>().1.as_ptr()
+                }
+            })
+            .collect();
+        let res: Vec<u8> = vec![0; batch_len];
+        (self.primitive)(batch.as_ptr(), init_v.as_ptr(), init_v.as_ptr(), batch_len as i64);
+    }
 }
 
 impl PhysicalExpr for ShortCircuit {
@@ -59,19 +73,10 @@ impl PhysicalExpr for ShortCircuit {
             })
             .collect();
         let init_v_ptr = unsafe { init_v.data().buffers()[0].align_to::<u8>().1.as_ptr() };
-        let mut res: Vec<u8> = vec![0; batch_len];
+        let res: Vec<u8> = vec![0; batch_len];
         (self.primitive)(batch.as_ptr(), init_v_ptr, res.as_ptr(), batch_len as i64);
-        let value_buffer = unsafe {
-            let buf = Buffer::from_raw_parts(NonNull::new_unchecked(res.as_mut_ptr()), res.len(), res.capacity());
-            std::mem::forget(res);
-            buf
-        };
-        let builder = ArrayData::builder(DataType::Boolean)
-            .len(init_v.len())
-            .add_buffer(value_buffer);
-
-        let array_data = unsafe { builder.build_unchecked() };
-        Ok(ColumnarValue::Array(Arc::new(BooleanArray::from(array_data))))
+        let res = build_boolean_array(res, init_v.len());
+        Ok(ColumnarValue::Array(Arc::new(res)))
     }
 
     fn children(&self) -> Vec<std::sync::Arc<dyn PhysicalExpr>> {
@@ -98,6 +103,21 @@ impl PartialEq<dyn Any> for ShortCircuit {
     fn eq(&self, _other: &dyn Any) -> bool {
         false
     }
+}
+
+#[inline]
+fn build_boolean_array(mut res: Vec<u8>, array_len: usize) -> BooleanArray {
+    let value_buffer = unsafe {
+        let buf = Buffer::from_raw_parts(NonNull::new_unchecked(res.as_mut_ptr()), res.len(), res.capacity());
+        std::mem::forget(res);
+        buf
+    };
+    let builder = ArrayData::builder(DataType::Boolean)
+        .len(array_len)
+        .add_buffer(value_buffer);
+
+    let array_data = unsafe { builder.build_unchecked() };
+    BooleanArray::from(array_data)
 }
 
 #[cfg(test)]
