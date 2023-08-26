@@ -111,7 +111,7 @@ impl std::fmt::Debug for PostingExec {
    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
        write!(f, "partitions: [...]")?;
        write!(f, "schema: {:?}", self.projected_schema)?;
-       write!(f, "projection: {:?}", self.projection);
+       write!(f, "projection: {:?}", self.projection)?;
        write!(f, "is_score: {:}", self.is_score)
    } 
 }
