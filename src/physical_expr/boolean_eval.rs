@@ -21,11 +21,41 @@ impl Primitives {
 }
 
 #[derive(Clone, Debug)]
+pub struct SubPredicate {
+    sub_predicate: PhysicalPredicate,
+    node_num: usize,
+    leaf_num: usize,
+    selectivity: f64,
+}
+
+impl SubPredicate {
+    pub fn new(
+        sub_predicate: PhysicalPredicate,
+        node_num: usize,
+        leaf_num: usize,
+        selectivity: f64,
+    ) -> Self {
+        Self {
+            sub_predicate,
+            node_num,
+            leaf_num,
+            selectivity,
+        }
+    }
+
+    pub fn new_with_predicate(
+        sub_predicate: PhysicalPredicate
+    ) -> Self {
+        Self::new(sub_predicate, 0, 0, 0.0)
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum PhysicalPredicate {
     /// `And` Level
-    And { args: Vec<PhysicalPredicate> },
+    And { args: Vec<SubPredicate> },
     /// `Or` Level
-    Or { args: Vec<PhysicalPredicate> },
+    Or { args: Vec<SubPredicate> },
     /// Leaf
     Leaf { primitive: Primitives },
 }
@@ -36,13 +66,13 @@ impl PhysicalPredicate {
         match self {
             PhysicalPredicate::And { args } => {
                 for predicate in args {
-                    init_v = predicate.eval(batch, init_v, true)?;
+                    init_v = predicate.sub_predicate.eval(batch, init_v, true)?;
                 }
                 Ok(init_v)
             }
             PhysicalPredicate::Or { args } => {
                 for predicate in args {
-                    init_v = predicate.eval(batch, init_v, false)?;
+                    init_v = predicate.sub_predicate.eval(batch, init_v, false)?;
                 }
                 Ok(init_v)
             }
@@ -162,7 +192,7 @@ mod tests {
 
     use datafusion::{arrow::{record_batch::RecordBatch, array::{BooleanArray, ArrayData}, buffer::Buffer, datatypes::{DataType, Schema, Field}}, physical_plan::{expressions::{col, BinaryExpr}, PhysicalExpr}, logical_expr::Operator};
 
-    use crate::{ShortCircuit, jit::ast::Predicate};
+    use crate::{ShortCircuit, jit::ast::Predicate, physical_expr::boolean_eval::SubPredicate};
 
     use super::{PhysicalPredicate, Primitives, BooleanEvalExpr};
 
@@ -220,10 +250,12 @@ mod tests {
             .map(op)
             .collect();
         let binary = BinaryExpr::new(col("test1", &schema).unwrap(), Operator::And, col("test5", &schema).unwrap());
+        let sub_predicate1 = SubPredicate::new_with_predicate(PhysicalPredicate::Leaf { primitive: Primitives::BitwisePrimitive(binary) });
+        let sub_predicate2 = SubPredicate::new_with_predicate(PhysicalPredicate::Leaf { primitive: Primitives::ShortCircuitPrimitive(primitive) });
         let physical_predicate = PhysicalPredicate::And {
             args: vec![
-                PhysicalPredicate::Leaf { primitive: Primitives::BitwisePrimitive(binary) },
-                PhysicalPredicate::Leaf { primitive: Primitives::ShortCircuitPrimitive(primitive) }
+                sub_predicate1,
+                sub_predicate2,
             ]
         };
         let res = BooleanEvalExpr::new(Arc::new(physical_predicate)).evaluate(&batch).unwrap().into_array(0);
