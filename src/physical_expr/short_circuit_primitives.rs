@@ -8,7 +8,7 @@ use crate::utils::Result;
 #[derive(Debug, Clone)]
 pub struct ShortCircuit {
     batch_idx: Vec<usize>,
-    primitive: fn(*const *const u8, *const u8, *const u8, i64) -> (),
+    primitive: fn(*const *const u8, *const u8, *mut u8, i64) -> (),
 }
 
 impl ShortCircuit {
@@ -44,7 +44,7 @@ impl ShortCircuit {
             })
             .collect();
         let mut res: Vec<u8> = vec![0; batch_len];
-        (self.primitive)(batch.as_ptr(), init_v.as_ptr(), res.as_ptr(), batch_len as i64);
+        (self.primitive)(batch.as_ptr(), init_v.as_ptr(), res.as_mut_ptr(), batch_len as i64);
         res
     }
 }
@@ -74,8 +74,8 @@ impl PhysicalExpr for ShortCircuit {
             })
             .collect();
         let init_v_ptr = unsafe { init_v.data().buffers()[0].align_to::<u8>().1.as_ptr() };
-        let res: Vec<u8> = vec![0; batch_len];
-        (self.primitive)(batch.as_ptr(), init_v_ptr, res.as_ptr(), batch_len as i64);
+        let mut res: Vec<u8> = vec![0; batch_len];
+        (self.primitive)(batch.as_ptr(), init_v_ptr, res.as_mut_ptr(), batch_len as i64);
         let res = build_boolean_array(res, init_v.len());
         Ok(ColumnarValue::Array(Arc::new(res)))
     }

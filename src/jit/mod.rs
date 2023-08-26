@@ -56,14 +56,14 @@ lazy_static!(
     };
 );
 
-pub fn jit_short_circuit(expr: Boolean, leaf_num: usize) -> Result<fn(*const *const u8, *const u8, *const u8, i64)> {
+pub fn jit_short_circuit(expr: Boolean, leaf_num: usize) -> Result<fn(*const *const u8, *const u8, *mut u8, i64)> {
     let assembler = Assembler::default();
     let gen_func = jit_short_circuit_primitive(&assembler, expr, leaf_num)?;
 
     let mut jit = assembler.create_jit();
     let gen_func = jit.compile(gen_func)?;
     let code_fn = unsafe {
-        core::mem::transmute::<_, fn(*const *const u8, *const u8, *const u8, i64)->()>(gen_func)
+        core::mem::transmute::<_, fn(*const *const u8, *const u8, *mut u8, i64)->()>(gen_func)
     };
     Ok(code_fn)
 }
