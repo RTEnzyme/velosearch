@@ -317,6 +317,7 @@ pub enum Predicate {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Boolean {
     pub predicate: Predicate,
+    pub start_idx: usize,
 }
 
 impl Boolean {

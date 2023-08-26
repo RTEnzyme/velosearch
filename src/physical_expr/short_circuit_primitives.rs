@@ -16,7 +16,8 @@ impl ShortCircuit {
         batch_idx: Vec<usize>,
         boolean_op_tree: Predicate,
         _node_num: usize,
-        leaf_num: usize
+        leaf_num: usize,
+        start_idx: usize,
     ) -> Result<Self> {
         // let primitive = if node_num <= JIT_MAX_NODES {
         //     // Seek the AOT compilation
@@ -26,7 +27,7 @@ impl ShortCircuit {
         //     jit_short_circuit(Boolean { predicate: boolean_op_tree }, leaf_num)?
         // };
         // JIT compilation the BooleanOpTree
-        let primitive = jit_short_circuit(Boolean { predicate: boolean_op_tree }, leaf_num)?;
+        let primitive = jit_short_circuit(Boolean { predicate: boolean_op_tree, start_idx}, leaf_num)?;
         Ok(Self {
             batch_idx,
             primitive,
@@ -148,6 +149,7 @@ mod tests {
             predicate,
             5,
             4,
+            0,
         ).unwrap();
         let schema = Arc::new(
             Schema::new(vec![

@@ -260,7 +260,8 @@ mod test {
                     ] },
                     Predicate::Leaf { idx: 3 },
                 ] 
-            }
+            },
+            start_idx: 0,
         };
         // allocate memory for result
         let result: Vec<u8> = vec![0x0; 2];
@@ -295,7 +296,7 @@ mod test {
     fn boolean_query_nested() {
         tracing_subscriber::fmt().with_max_level(Level::DEBUG).init();
         let jit_expr = Boolean {
-            predicate: Predicate::And { 
+            predicate: Predicate::And {
                 args: vec![
                     Predicate::Leaf { idx: 0 },
                     Predicate::Or { args: vec![
@@ -306,7 +307,8 @@ mod test {
                         ] }
                     ] },
                 ] 
-            }
+            },
+            start_idx: 0,
         };
         // allocate memory for result
         let result: Vec<u8> = vec![0x0; 2];

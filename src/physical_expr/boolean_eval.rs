@@ -172,11 +172,11 @@ mod tests {
             args: vec![
                 Predicate::Or { 
                     args: vec![
-                        Predicate::Leaf { idx: 0 },
-                        Predicate::Leaf { idx: 1 },
+                        Predicate::Leaf { idx: 2 },
+                        Predicate::Leaf { idx: 3 },
                     ]
                 },
-                Predicate::Leaf { idx: 2 },
+                Predicate::Leaf { idx: 4 },
             ]
         };
         let primitive = ShortCircuit::try_new(
@@ -184,6 +184,7 @@ mod tests {
             predicate,
             4,
             3,
+            2,
         ).unwrap();
         let schema = Arc::new(
             Schema::new(vec![
