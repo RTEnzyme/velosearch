@@ -24,10 +24,24 @@ impl Primitives {
 
 #[derive(Clone, Debug)]
 pub struct SubPredicate {
-    sub_predicate: PhysicalPredicate,
+    pub sub_predicate: PhysicalPredicate,
     node_num: usize,
     leaf_num: usize,
     selectivity: f64,
+}
+
+impl SubPredicate {
+    pub fn node_num(&self) -> usize {
+        self.node_num
+    }
+
+    pub fn leaf_num(&self) -> usize {
+        self.leaf_num
+    }
+
+    pub fn sel(&self) -> f64 {
+        self.selectivity
+    }
 }
 
 impl SubPredicate {

@@ -18,7 +18,7 @@ use datafusion::{
 use futures::{future::BoxFuture, FutureExt};
 use tracing::{debug, trace};
 
-use crate::physical_expr::boolean_eval::PhysicalPredicate;
+use crate::physical_expr::boolean_eval::{PhysicalPredicate, Primitives, SubPredicate};
 
 /// Boolean physical query planner that converts a
 /// `LogicalPlan` to an `ExecutionPlan` suitable for execution.
@@ -487,7 +487,6 @@ impl<'a> CnfPredicate<'a> {
 
 struct PhysicalPredicateBuilder<'a> {
     root: &'a Predicate,
-    physical_predicate: Vec<PhysicalPredicate>,
     idx: usize,
     term2idx: HashMap<&'a str, usize>,
 }
@@ -496,22 +495,51 @@ impl<'a> PhysicalPredicateBuilder<'a> {
     fn new(root: &'a Predicate, term2idx: HashMap<&'a str, usize>) -> Self {
         Self {
             root,
-            physical_predicate: vec![],
             idx: 0,
             term2idx
         }
     }
 
-    fn convert_physical(&mut self) -> Result<PhysicalPredicate> {
-        match self.root {
+    fn build(self) -> Result<PhysicalPredicate> {
+        Ok(self.convert_physical(self.root)?.sub_predicate)
+    }
+
+    fn convert_physical(&self, predicate: &Predicate) -> Result<SubPredicate> {
+        match predicate {
             Predicate::And { args } => {
-                
+                let mut nodes = vec![];
+                let mut sel = 1.0;
+                let mut node_num = 0;
+                let mut leaf_num = 0;
+                for arg in args {
+                    let sub_predicate = self.convert_physical(&arg.0)?;
+                    node_num += sub_predicate.node_num();
+                    leaf_num += sub_predicate.leaf_num();
+                    sel *= sub_predicate.sel();
+                    nodes.push(sub_predicate);
+                }
+                let physical_predicate = PhysicalPredicate::And { args: nodes };
+                Ok(SubPredicate::new(physical_predicate, node_num, leaf_num, sel))
             }
             Predicate::Or { args } => {
-
+                let mut nodes = vec![];
+                let mut sel = 1.0;
+                let mut node_num = 0;
+                let mut leaf_num = 0;
+                for arg in args {
+                    let sub_predicate = self.convert_physical(&arg.0)?;
+                    node_num += sub_predicate.node_num();
+                    leaf_num += sub_predicate.leaf_num();
+                    sel += sub_predicate.sel() * (1. - sel);
+                    nodes.push(sub_predicate);
+                }
+                let physical_predicate = PhysicalPredicate::Or { args: nodes };
+                Ok(SubPredicate::new(physical_predicate, node_num + 1, leaf_num, sel))
             }
             Predicate::Other { expr } => {
-                Err(DataFusionError::Internal(format!("Don't support one term query without operator")))
+                let expr_name = expr.display_name()?;
+                let predicate = PhysicalPredicate::Leaf { primitive: Primitives::ColumnPrimitive(Column::new(expr_name.as_str(), *self.term2idx.get(expr_name.as_str()).unwrap())) };
+                Ok(SubPredicate::new(predicate, 1, 1, 1.0))
             }
         }
     }
@@ -519,32 +547,31 @@ impl<'a> PhysicalPredicateBuilder<'a> {
 
 #[cfg(test)]
 mod tests {
-    // use std::{unreachable, println, assert_eq};
+    use std::collections::HashMap;
 
-    // use datafusion::prelude::{col, boolean_or, boolean_and, Expr};
+    use datafusion::prelude::{boolean_or, boolean_and, col};
 
-    // use super::CnfPredicate;
+    use crate::optimizer::logical_optimizer::{predicate, rewrite_predicate};
 
-    // #[test]
-    // fn cnf_predicates_convert() {
-    //     let a = col("a");
-    //     let b = col("b");
-    //     let c = col("c");
-    //     let a_b = boolean_or(a, b);
-    //     let a_b_c = boolean_and(a_b, c);
-    //     if let Expr::BooleanQuery(boolean) = a_b_c {
-    //         let mut cnf = CnfPredicate::new(
-    //             &boolean,
-    //         );
-    //         cnf.flatten_cnf_predicate();
-    //         let cnf_list = cnf.collect();
-    //         assert_eq!(2, cnf_list.len());
-    //         // assert_eq!(&Column::new("a", 0), cnf_list[0][0].clone().as_any().downcast_ref::<Column>().unwrap());
-    //         // assert_eq!(&Column::new("b", 1), cnf_list[0][1].clone().as_any().downcast_ref::<Column>().unwrap());
-    //         // assert_eq!(&Column::new("c", 2), cnf_list[1][0].clone().as_any().downcast_ref::<Column>().unwrap());
-    //         println!("{:?}", cnf_list[0][0]);
-    //     } else {
-    //         unreachable!()
-    //     }
-    // }
+    use super::PhysicalPredicateBuilder;
+
+    #[test]
+    fn test_physical_predicate_builder() {
+        let boolean_or = boolean_or(col("3"), col("2"));
+        let boolean_expr = boolean_and(col("1"), boolean_or);
+        let boolean_expr = boolean_and(col("4"), boolean_expr);
+        let predicate = predicate(&boolean_expr).unwrap();
+        let predicate = rewrite_predicate(predicate.0).0;
+        println!("{:?}", predicate);
+        
+        let term1 = format!("1");
+        let term2 = format!("2");
+        let term3 = format!("3");
+        let term4 = format!("4");
+        let term2idx = HashMap::from([(term1.as_str(), 0), (term2.as_str(), 1), (term3.as_str(), 2), (term4.as_str(), 3)]);
+        let builder = PhysicalPredicateBuilder::new(&predicate, term2idx);
+
+        let physical_predicate = builder.build().unwrap();
+        println!("{:?}", physical_predicate);
+    }
 }

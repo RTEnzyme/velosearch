@@ -158,7 +158,7 @@ impl OptimizerRule for RewriteBooleanPredicate {
 
 
 
-fn predicate(expr: &Expr) -> Result<(Predicate, f64, usize, usize)> {
+pub fn predicate(expr: &Expr) -> Result<(Predicate, f64, usize, usize)> {
     match expr {
     Expr::BooleanQuery(BooleanQuery {left, op, right }) => match op {
             Operator::BitwiseAnd => {
@@ -203,7 +203,7 @@ fn normalize_predicate(predicate: Predicate) -> Expr {
     }
 }
 
-fn rewrite_predicate(predicate: Predicate) -> (Predicate, f64, usize, usize) {
+pub fn rewrite_predicate(predicate: Predicate) -> (Predicate, f64, usize, usize) {
     let mut node_num = 0;
     let mut leaf_num = 0;
     match predicate {
