@@ -8,7 +8,7 @@ use datafusion::{
     physical_plan::{rewrite::{TreeNodeRewriter, RewriteRecursion, TreeNodeRewritable}, 
     ExecutionPlan, boolean::BooleanExec}, error::DataFusionError, 
     physical_expr::BooleanQueryExpr, 
-    arrow::{datatypes::Schema, array::{BooleanArray, ArrayRef, Array}, record_batch::RecordBatch}, common::TermMeta, from_slice::FromSlice
+    arrow::{datatypes::Schema, array::{BooleanArray, Array}, record_batch::RecordBatch}, common::TermMeta,
 };
 use datafusion::common::Result;
 use tracing::debug;

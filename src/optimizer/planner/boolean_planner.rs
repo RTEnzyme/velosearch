@@ -348,20 +348,6 @@ fn create_physical_expr(
             binary(lhs, *op, rhs, input_schema)
         }
         Expr::BooleanQuery(BooleanQuery { left, op, right }) => {
-            // let mut cnf_predicates = CnfPredicate::new(
-            //     boolean,
-            //     input_dfschema,
-            //     input_schema,
-            //     execution_props,
-            // );
-            // cnf_predicates.flatten_cnf_predicate();
-            // let cnf_predicates = cnf_predicates.collect();
-            // let binary_expr = create_physical_expr(&Expr::BinaryExpr(BinaryExpr{
-            //     left: boolean.left,
-            //     op: boolean.op,
-            //     right: boolean.right,
-            // }), input_dfschema, input_schema, execution_props)?;
-            // boolean_query(binary_expr, input_schema)
             let lhs = create_physical_expr(
                 left,
                 input_dfschema,

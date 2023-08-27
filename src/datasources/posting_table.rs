@@ -37,7 +37,7 @@ impl PostingTable {
     }
 
     #[inline]
-    pub fn stat_of(&self, term_name: &str, partition: usize) -> Option<TermMeta> {
+    pub fn stat_of(&self, term_name: &str, _partition: usize) -> Option<TermMeta> {
         self.term_idx.get(term_name)
     }
 
