@@ -487,7 +487,7 @@ impl TermMetaBuilder {
                     (None, None)
                 } else {
                     let distribution = Arc::new(BooleanArray::from_slice(&self.distribution[v]));
-                    let index = UInt16Array::from(self.idx[v].clone());
+                    let index = Arc::new(UInt16Array::from(self.idx[v].clone()));
                     (Some(distribution), Some(index))
                 }
             })

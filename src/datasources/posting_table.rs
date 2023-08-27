@@ -156,7 +156,7 @@ impl ExecutionPlan for PostingExec {
         debug!("Start PostingExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         let distri = self.projected_term_meta.iter()
             .map(|v| match v {
-                Some(v) => v.distribution[partition].clone(),
+                Some(v) => v.index[partition].clone(),
                 None => None,
             })
             .collect();
@@ -262,7 +262,7 @@ impl PostingStream {
         data: Arc<Vec<PostingBatch>>,
         schema: SchemaRef,
         min_range: Arc<BooleanArray>,
-        distri: Vec<Option<Arc<BooleanArray>>>,
+        distri: Vec<Option<Arc<UInt16Array>>>,
         is_score: bool,
     ) -> Result<Self> {
         debug!("Try new a PostingStream");

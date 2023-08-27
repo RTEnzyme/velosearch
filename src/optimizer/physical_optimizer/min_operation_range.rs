@@ -81,15 +81,16 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
             let projected_schema = self.partition_schema.as_ref().unwrap().clone();
             let project_terms: Vec<&str> = projected_schema.fields().into_iter().map(|f| f.name().as_str()).collect();
             let term_stats: Vec<Option<TermMeta>> = posting.term_metas_of(&project_terms);
+            let partition_num = posting.output_partitioning().partition_count();
             debug!("collect partition range");
-            let partition_range: Vec<Arc<BooleanArray>> = (0..term_stats.len())
+            let partition_range: Vec<Arc<BooleanArray>> = (0..partition_num)
                 // .into_par_iter()
                 .into_iter()
                 .map(|p| {
                     let mut length = None;
                     for v in &term_stats {
                         if let Some(t) = v {
-                            length = t.distribution[p].as_ref().map(|v| v.len());
+                            length = t.distribution[0].as_ref().map(|v| v.len());
                         }
                     }
                     if let Some(length) = length {
