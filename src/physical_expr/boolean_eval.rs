@@ -1,6 +1,6 @@
 use std::{sync::Arc, any::Any};
 
-use datafusion::{physical_plan::{expressions::BinaryExpr, PhysicalExpr, ColumnarValue}, arrow::{datatypes::{Schema, DataType}, record_batch::RecordBatch}, error::DataFusionError, common::Result};
+use datafusion::{physical_plan::{expressions::{BinaryExpr, Column}, PhysicalExpr, ColumnarValue}, arrow::{datatypes::{Schema, DataType}, record_batch::RecordBatch}, error::DataFusionError, common::Result};
 
 use crate::ShortCircuit;
 use crate::utils::array::build_boolean_array;
@@ -8,7 +8,8 @@ use crate::utils::array::build_boolean_array;
 #[derive(Clone, Debug)]
 pub enum Primitives {
     BitwisePrimitive(BinaryExpr),
-    ShortCircuitPrimitive(ShortCircuit)
+    ShortCircuitPrimitive(ShortCircuit),
+    ColumnPrimitive(Column),
 }
 
 impl Primitives {
@@ -16,6 +17,7 @@ impl Primitives {
         match self {
             Primitives::BitwisePrimitive(b) => b.evaluate(batch),
             Primitives::ShortCircuitPrimitive(s) => s.evaluate(batch),
+            Primitives::ColumnPrimitive(c) => c.evaluate(batch),
         }
     }
 }
@@ -108,6 +110,24 @@ impl PhysicalPredicate {
                                 init_v[i] |= init_v_or[i];
                             }
                             Ok(init_v)
+                        }
+                    }
+                    Primitives::ColumnPrimitive(c) => {
+                        let eval_res = c.evaluate(batch)?.into_array(0).data().buffers()[0].to_vec();
+                        if is_and {
+                            Ok(eval_res
+                                .into_iter()
+                                .zip(init_v.into_iter())
+                                .map(|(i, j)| i & j)
+                                .collect()
+                            )
+                        } else {
+                            Ok(eval_res
+                                .into_iter()
+                                .zip(init_v.into_iter())
+                                .map(|(i, j)| i | j)
+                                .collect()
+                            )
                         }
                     }
                 }
