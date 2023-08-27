@@ -501,6 +501,20 @@ impl<'a> PhysicalPredicateBuilder<'a> {
             term2idx
         }
     }
+
+    fn convert_physical(&mut self) -> Result<PhysicalPredicate> {
+        match self.root {
+            Predicate::And { args } => {
+                
+            }
+            Predicate::Or { args } => {
+
+            }
+            Predicate::Other { expr } => {
+                Err(DataFusionError::Internal(format!("Don't support one term query without operator")))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
