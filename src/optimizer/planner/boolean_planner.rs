@@ -487,16 +487,16 @@ impl<'a> CnfPredicate<'a> {
 
 struct PhysicalPredicateBuilder<'a> {
     root: &'a Predicate,
-    idx: usize,
     term2idx: HashMap<&'a str, usize>,
+    term2sel: HashMap<&'a str, f64>,
 }
 
 impl<'a> PhysicalPredicateBuilder<'a> {
-    fn new(root: &'a Predicate, term2idx: HashMap<&'a str, usize>) -> Self {
+    fn new(root: &'a Predicate, term2idx: HashMap<&'a str, usize>, term2sel: HashMap<&'a str, f64>) -> Self {
         Self {
             root,
-            idx: 0,
-            term2idx
+            term2idx,
+            term2sel,
         }
     }
 
@@ -523,7 +523,7 @@ impl<'a> PhysicalPredicateBuilder<'a> {
             }
             Predicate::Or { args } => {
                 let mut nodes = vec![];
-                let mut sel = 1.0;
+                let mut sel = 0.;
                 let mut node_num = 0;
                 let mut leaf_num = 0;
                 for arg in args {
@@ -538,8 +538,9 @@ impl<'a> PhysicalPredicateBuilder<'a> {
             }
             Predicate::Other { expr } => {
                 let expr_name = expr.display_name()?;
+                let sel = self.term2sel[expr_name.as_str()];
                 let predicate = PhysicalPredicate::Leaf { primitive: Primitives::ColumnPrimitive(Column::new(expr_name.as_str(), *self.term2idx.get(expr_name.as_str()).unwrap())) };
-                Ok(SubPredicate::new(predicate, 1, 1, 1.0))
+                Ok(SubPredicate::new(predicate, 1, 1, sel))
             }
         }
     }
@@ -569,7 +570,8 @@ mod tests {
         let term3 = format!("3");
         let term4 = format!("4");
         let term2idx = HashMap::from([(term1.as_str(), 0), (term2.as_str(), 1), (term3.as_str(), 2), (term4.as_str(), 3)]);
-        let builder = PhysicalPredicateBuilder::new(&predicate, term2idx);
+        let term2sel = HashMap::from([(term1.as_str(), 0.1), (term2.as_str(), 0.2), (term3.as_str(), 0.3), (term4.as_str(), 0.4)]);
+        let builder = PhysicalPredicateBuilder::new(&predicate, term2idx, term2sel);
 
         let physical_predicate = builder.build().unwrap();
         println!("{:?}", physical_predicate);
