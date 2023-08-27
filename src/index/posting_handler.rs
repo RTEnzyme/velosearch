@@ -151,14 +151,13 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
     info!("The lenght of schema: {}", schema.fields().len());
     info!("num_512: {}, num_512_partition: {}", num_512, num_512_partition);
     let mut partition_batch = Vec::new();
-    let mut term_idx: Vec<BTreeMap<String, TermMetaBuilder>> = Vec::new();
+    let mut term_idx: BTreeMap<String, TermMetaBuilder> = BTreeMap::new();
     for i in 0..partition_nums {
         let mut batches = Vec::new();
         for j in 0..num_512_partition {
             batches.push(PostingBatchBuilder::new((i as u32 * batch_size * num_512_partition + j as u32 * batch_size) as u32));
         }
         partition_batch.push(batches);
-        term_idx.push(BTreeMap::new());
     }
     let mut current = (0, 0);
     let mut thredhold = batch_size;
@@ -168,7 +167,7 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
         .into_iter()
         .zip(ids.into_iter())
         .for_each(|(word, id)| {
-            let entry = term_idx[current.0].entry(word.clone()).or_insert(TermMetaBuilder::new(num_512_partition as usize));
+            let entry = term_idx.entry(word.clone()).or_insert(TermMetaBuilder::new(num_512_partition as usize, partition_nums));
             if id >= thredhold as u32 {
                 debug!("id: {}", id);
                 if id >= (batch_size * num_512_partition * (current.0 as u32 + 1)) {
@@ -182,7 +181,7 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
                 thredhold += batch_size;
             }
             partition_batch[current.0][current.1].push_term(word, id).expect("Shoud push term correctly");
-            entry.set_true(current.1);
+            entry.set_true(current.1, current.0);
         });
     for (i, p) in partition_batch.iter().enumerate() {
         for (j, pp) in p.into_iter().enumerate() {
@@ -191,34 +190,28 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
     }
     let partition_batch = partition_batch
         .into_iter()
-        .zip(term_idx.iter_mut())
-        .map(|(b, t)| Arc::new(
+        .enumerate()
+        .map(|(n, b )| Arc::new(
             b
             .into_iter()
             .enumerate()
-            .map(|(i, b)| b.build_with_idx(t, i as u16).unwrap()).collect()))
+            .map(|(i, b)| b.build_with_idx(&mut term_idx, i as u16, n).unwrap() ).collect()))
         .collect();
 
-    let term_idx = term_idx
+    let mut keys = Vec::new();
+    let mut values = Vec::new();
+    term_idx
         .into_iter()
-        .map(|m| {
-            let mut keys = Vec::new();
-            let mut values = Vec::new();
-            m
-                .into_iter()
-                .for_each(|(k, v)| {
-                    keys.push(k); 
-                    values.push(v.build());
-            });
-            #[cfg(feature = "hash_idx")]
-            let idx = Arc::new(TermIdx { term_map: map });
+        .for_each(|m| {
+            keys.push(m.0); 
+            values.push(m.1.build());
+        });
+    #[cfg(feature = "hash_idx")]
+    let term_idx = Arc::new(TermIdx { term_map: map });
 
-            #[cfg(all(feature = "trie_idx", not(feature = "hash_idx")))]
-            let idx = Arc::new(TermIdx::new(keys, values, 20));
+    #[cfg(all(feature = "trie_idx", not(feature = "hash_idx")))]
+    let term_idx = Arc::new(TermIdx::new(keys, values, 20));
 
-            idx
-        })
-        .collect();
     PostingTable::new(
         Arc::new(schema),
         term_idx,

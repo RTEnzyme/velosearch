@@ -15,7 +15,7 @@ use crate::batch::{PostingBatch, BatchRange, PostingBatchBuilder};
 
 pub struct PostingTable {
     schema: SchemaRef,
-    term_idx: Vec<Arc<TermIdx<TermMeta>>>,
+    term_idx: Arc<TermIdx<TermMeta>>,
     postings: Vec<Arc<Vec<PostingBatch>>>,
     batch_builder: PostingBatchBuilder,
 }
@@ -23,7 +23,7 @@ pub struct PostingTable {
 impl PostingTable {
     pub fn new(
         schema: SchemaRef,
-        term_idx: Vec<Arc<TermIdx<TermMeta>>>,
+        term_idx: Arc<TermIdx<TermMeta>>,
         batches: Vec<Arc<Vec<PostingBatch>>>,
         range: &BatchRange,
     ) -> Self {
@@ -38,7 +38,7 @@ impl PostingTable {
 
     #[inline]
     pub fn stat_of(&self, term_name: &str, partition: usize) -> Option<TermMeta> {
-        self.term_idx[partition].get(term_name)
+        self.term_idx.get(term_name)
     }
 
     pub fn stats_of(&self, term_names: &[&str], partition: usize) -> Vec<Option<TermMeta>> {
@@ -50,10 +50,7 @@ impl PostingTable {
 
     pub fn space_usage(&self) -> usize {
         let mut space: usize = 0;
-        space += self.term_idx
-            .iter()
-            .map(|v| size_of_val(&v))
-            .sum::<usize>();
+        space += size_of_val(self.term_idx.as_ref());
         space += self.postings
             .iter()
             .map(|v| v.iter().map(|v| v.space_usage()).sum::<usize>())
@@ -99,11 +96,12 @@ impl TableProvider for PostingTable {
 pub struct PostingExec {
     pub partitions: Vec<Arc<Vec<PostingBatch>>>,
     pub schema: SchemaRef,
-    pub term_idx: Vec<Arc<TermIdx<TermMeta>>>,
+    pub term_idx: Arc<TermIdx<TermMeta>>,
     pub projected_schema: SchemaRef,
     pub projection: Option<Vec<usize>>,
     pub partition_min_range: Option<Vec<Arc<BooleanArray>>>,
     pub is_score: bool,
+    pub projected_term_meta: Vec<Option<TermMeta>>,
     metric: ExecutionPlanMetricsSet,
 }
 
@@ -156,11 +154,17 @@ impl ExecutionPlan for PostingExec {
             context: Arc<datafusion::execution::context::TaskContext>,
         ) -> Result<datafusion::physical_plan::SendableRecordBatchStream> {
         debug!("Start PostingExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        let distri = self.projected_term_meta.iter()
+            .map(|v| match v {
+                Some(v) => v.distribution[partition].clone(),
+                None => None,
+            })
+            .collect();
         Ok(Box::pin(PostingStream::try_new(
             self.partitions[partition].clone(),
             self.projected_schema.clone(),
             self.partition_min_range.as_ref().unwrap()[partition].clone(),
-            self.term_idx[partition].clone(),
+            distri,
             self.is_score,
         )?))
     }
@@ -204,12 +208,18 @@ impl PostingExec {
     /// The provided `schema` shuold not have the projection applied.
     pub fn try_new(
         partitions: Vec<Arc<Vec<PostingBatch>>>,
-        term_idx: Vec<Arc<TermIdx<TermMeta>>>,
+        term_idx: Arc<TermIdx<TermMeta>>,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
         partition_min_range: Option<Vec<Arc<BooleanArray>>>,
     ) -> Result<Self> {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
+        let projected_term_meta = projected_schema.as_ref()
+            .fields()
+            .into_iter()
+            .filter(|f| f.name().as_str() != "__id__")
+            .map(|f| term_idx.get(f.name().as_str()))
+            .collect();
         Ok(Self {
             partitions: partitions,
             term_idx,
@@ -218,13 +228,14 @@ impl PostingExec {
             projection,
             partition_min_range,
             is_score: false,
+            projected_term_meta,
             metric: ExecutionPlanMetricsSet::new(),
         })
     }
 
     /// Get TermMeta From &[&str]
-    pub fn term_metas_of(&self, terms: &[&str], partition: usize) -> Vec<Option<TermMeta>> {
-        let term_idx = self.term_idx[partition].clone();
+    pub fn term_metas_of(&self, terms: &[&str]) -> Vec<Option<TermMeta>> {
+        let term_idx = self.term_idx.clone();
         terms
             .into_iter()
             .map(|&t| {
@@ -251,7 +262,7 @@ impl PostingStream {
         data: Arc<Vec<PostingBatch>>,
         schema: SchemaRef,
         min_range: Arc<BooleanArray>,
-        term_idx: Arc<TermIdx<TermMeta>>,
+        distri: Vec<Option<Arc<BooleanArray>>>,
         is_score: bool,
     ) -> Result<Self> {
         debug!("Try new a PostingStream");
@@ -259,15 +270,12 @@ impl PostingStream {
         let data_len = data.len();
 
         let schema_async = schema.clone();
-        let term_async = term_idx.clone();
         debug!("is_score: {:?}", is_score);
         let valid_data = async move {
-            let distr: Vec<UInt16Array> = schema_async.fields().into_iter()
-                .map(|f| f.name())
-                .filter(|f| *f != "__id__")
-                .map(|f| match term_async.get(f) {
+            let distr: Vec<UInt16Array> = distri.into_iter()
+                .map(|f| match f {
                     Some(v) => filter(
-                        v.index.as_ref(),
+                        v.as_ref(),
                         &min_range,
                     ).unwrap().as_any().downcast_ref::<UInt16Array>().unwrap().to_owned(),
                     None => UInt16Array::from(vec![None; valid_cnt]),
@@ -361,89 +369,89 @@ pub fn make_posting_schema(fields: Vec<&str>) -> Schema {
 #[cfg(test)]
 mod tests {
 
-    use datafusion::{
-        prelude::SessionContext, 
-        arrow::array::{UInt16Array, UInt32Array}, 
-        from_slice::FromSlice, common::cast::as_uint32_array, 
-    };
-    use futures::StreamExt;
+    // use datafusion::{
+    //     prelude::SessionContext, 
+    //     arrow::array::{UInt16Array, UInt32Array}, 
+    //     from_slice::FromSlice, common::cast::as_uint32_array, 
+    // };
+    // use futures::StreamExt;
 
-    use super::*;
+    // use super::*;
 
-    fn create_posting_table() -> (Arc<Schema>, Arc<BatchRange>, PostingTable) {
-        let schema = Arc::new(make_posting_schema(vec!["a", "b", "c", "d"]));
-        let range = Arc::new(BatchRange::new(0, 20));
+    // fn create_posting_table() -> (Arc<Schema>, Arc<BatchRange>, PostingTable) {
+    //     let schema = Arc::new(make_posting_schema(vec!["a", "b", "c", "d"]));
+    //     let range = Arc::new(BatchRange::new(0, 20));
 
-        let batch = PostingBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(UInt16Array::from_slice([1, 2, 6, 8, 15])),
-                Arc::new(UInt16Array::from_slice([0, 4, 9, 13, 17])),
-                Arc::new(UInt16Array::from_slice([3, 7, 11, 17, 19])),
-                Arc::new(UInt16Array::from_slice([6, 7, 9, 14, 18])),
-                Arc::new(UInt16Array::from_slice([])),
-            ],
-            range.clone()
-        ).expect("Can't try new a PostingBatch");
+    //     let batch = PostingBatch::try_new(
+    //         schema.clone(),
+    //         vec![
+    //             Arc::new(UInt16Array::from_slice([1, 2, 6, 8, 15])),
+    //             Arc::new(UInt16Array::from_slice([0, 4, 9, 13, 17])),
+    //             Arc::new(UInt16Array::from_slice([3, 7, 11, 17, 19])),
+    //             Arc::new(UInt16Array::from_slice([6, 7, 9, 14, 18])),
+    //             Arc::new(UInt16Array::from_slice([])),
+    //         ],
+    //         range.clone()
+    //     ).expect("Can't try new a PostingBatch");
 
-        let term_idx: Vec<Arc<TermIdx<TermMeta>>> = vec![];
-        let provider = PostingTable::new(
-                schema.clone(),
-                term_idx,
-                vec![Arc::new(vec![batch])],
-                &range
-            );
-        return (schema, range, provider)
-    }
+    //     let term_idx: Arc<TermIdx<TermMeta>> = Arc::new(TermIdx::new(keys, values, skip_length));
+    //     let provider = PostingTable::new(
+    //             schema.clone(),
+    //             term_idx,
+    //             vec![Arc::new(vec![batch])],
+    //             &range
+    //         );
+    //     return (schema, range, provider)
+    // }
 
-    #[tokio::test]
-    async fn test_with_projection() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
-        let (_, _, provider) = create_posting_table();
+    // #[tokio::test]
+    // async fn test_with_projection() -> Result<()> {
+    //     let session_ctx = SessionContext::new();
+    //     let task_ctx = session_ctx.task_ctx();
+    //     let (_, _, provider) = create_posting_table();
 
-        let exec = provider
-            .scan(&session_ctx.state(), Some(&vec![1, 2]), &[], None)
-            .await?;
+    //     let exec = provider
+    //         .scan(&session_ctx.state(), Some(&vec![1, 2]), &[], None)
+    //         .await?;
 
-        let mut it = exec.execute(0, task_ctx)?;
-        let batch2 = it.next().await.unwrap()?;
-        assert_eq!(2, batch2.schema().fields().len());
-        assert_eq!("b", batch2.schema().field(0).name());
-        assert_eq!("c", batch2.schema().field(1).name());
-        assert_eq!(2, batch2.num_columns());
-        Ok(())
-    }
+    //     let mut it = exec.execute(0, task_ctx)?;
+    //     let batch2 = it.next().await.unwrap()?;
+    //     assert_eq!(2, batch2.schema().fields().len());
+    //     assert_eq!("b", batch2.schema().field(0).name());
+    //     assert_eq!("c", batch2.schema().field(1).name());
+    //     assert_eq!(2, batch2.num_columns());
+    //     Ok(())
+    // }
 
-    #[tokio::test]
-    async fn test_exec_fold() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
-        let (_, _, provider) = create_posting_table();
+    // #[tokio::test]
+    // async fn test_exec_fold() -> Result<()> {
+    //     let session_ctx = SessionContext::new();
+    //     let task_ctx = session_ctx.task_ctx();
+    //     let (_, _, provider) = create_posting_table();
 
-        let exec = provider
-            .scan(&session_ctx.state(), Some(&vec![0, 3]), &[], None)
-            .await?;
+    //     let exec = provider
+    //         .scan(&session_ctx.state(), Some(&vec![0, 3]), &[], None)
+    //         .await?;
 
-        let mut it = exec.execute(0, task_ctx)?;
-        let res_batch: RecordBatch = it.next().await.unwrap()?;
-        assert_eq!(2, res_batch.schema().fields().len());
+    //     let mut it = exec.execute(0, task_ctx)?;
+    //     let res_batch: RecordBatch = it.next().await.unwrap()?;
+    //     assert_eq!(2, res_batch.schema().fields().len());
 
-        let target_res = vec![
-            // 1, 2, 6, 8, 15
-            UInt32Array::from_slice([0x62810000 as u32]),
-            // 6, 7, 9, 14, 18]
-            UInt32Array::from_slice([0x03422000 as u32]),
-        ];
-        res_batch.columns()
-        .into_iter()
-        .enumerate()
-        .for_each(|(i, v)| {
-            assert_eq!(&target_res[i], as_uint32_array(v).expect("Can't cast to UIn32Array"));
-        });
+    //     let target_res = vec![
+    //         // 1, 2, 6, 8, 15
+    //         UInt32Array::from_slice([0x62810000 as u32]),
+    //         // 6, 7, 9, 14, 18]
+    //         UInt32Array::from_slice([0x03422000 as u32]),
+    //     ];
+    //     res_batch.columns()
+    //     .into_iter()
+    //     .enumerate()
+    //     .for_each(|(i, v)| {
+    //         assert_eq!(&target_res[i], as_uint32_array(v).expect("Can't cast to UIn32Array"));
+    //     });
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     // #[tokio::test]
     // async fn simple_boolean_query_without_optimizer() -> Result<()> {

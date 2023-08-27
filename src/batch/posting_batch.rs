@@ -396,7 +396,7 @@ impl PostingBatchBuilder {
             Arc::new(BatchRange::new(self.start, self.current + 1)))
     }
 
-    pub fn build_with_idx(self, idx: &mut BTreeMap<String, TermMetaBuilder>, batch_idx: u16) -> Result<PostingBatch> {
+    pub fn build_with_idx(self, idx: &mut BTreeMap<String, TermMetaBuilder>, batch_idx: u16, partition_num: usize) -> Result<PostingBatch> {
         let term_dict = self.term_dict
             .into_inner()
             .expect("Can't acquire the RwLock correctly");
@@ -407,7 +407,7 @@ impl PostingBatchBuilder {
             .into_iter()
             .enumerate()
             .for_each(|(i, (k, v))| {
-                idx.get_mut(&k).unwrap().add_idx((batch_idx, i as u16));
+                idx.get_mut(&k).unwrap().add_idx((batch_idx, i as u16), partition_num);
                 let mut freq: Vec<Option<Vec<Option<u8>>>> = vec![None; 4];
                 let mut posting = Vec::with_capacity(v.len());
                 let v_len = v.len();
@@ -450,37 +450,51 @@ impl PostingBatchBuilder {
 
 #[derive(Clone)]
 pub struct TermMetaBuilder {
-    distribution: Vec<bool>,
-    nums: u32,
-    idx: Vec<Option<u16>>,
+    distribution: Vec<Vec<bool>>,
+    nums: Vec<u32>,
+    idx: Vec<Vec<Option<u16>>>,
+    partition_num: usize,
 }
 
 impl TermMetaBuilder {
-    pub fn new(batch_num: usize) -> Self {
+    pub fn new(batch_num: usize, partition_num: usize) -> Self {
         Self {
-            distribution: vec![false; batch_num],
-            nums: 0,
-            idx: vec![None; batch_num],
+            distribution: vec![vec![false; batch_num]; partition_num],
+            nums: vec![0; partition_num],
+            idx: vec![vec![None; batch_num]; partition_num],
+            partition_num,
         }
     }
 
-    pub fn set_true(&mut self, i: usize) {
-        if self.distribution[i] {
+    pub fn set_true(&mut self, i: usize, partition_num: usize) {
+        if self.distribution[partition_num][i] {
             return;
         }
-        self.nums += 1;
-        self.distribution[i] = true;
+        self.nums[partition_num] += 1;
+        self.distribution[partition_num][i] = true;
     }
 
-    pub fn add_idx(&mut self, idx: (u16, u16)) {
-        self.idx[idx.0 as usize] = Some(idx.1);
+    pub fn add_idx(&mut self, idx: (u16, u16), partition_num: usize) {
+        self.idx[partition_num][idx.0 as usize] = Some(idx.1);
     }
 
 
     pub fn build(self) -> TermMeta {
+        let (distribution, index) = (0..self.partition_num)
+            .into_iter()
+            .map(|v| {
+                if self.nums[v] == 0 {
+                    (None, None)
+                } else {
+                    let distribution = Arc::new(BooleanArray::from_slice(&self.distribution[v]));
+                    let index = UInt16Array::from(self.idx[v].clone());
+                    (Some(distribution), Some(index))
+                }
+            })
+            .unzip();
         TermMeta {
-            distribution: Arc::new(BooleanArray::from_slice(&self.distribution)),
-            index: Arc::new(UInt16Array::from(self.idx)),
+            distribution: Arc::new(distribution),
+            index: Arc::new(index),
             nums: self.nums,
             selectivity: 0.,
         }

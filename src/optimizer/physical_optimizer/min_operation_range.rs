@@ -8,7 +8,7 @@ use datafusion::{
     physical_plan::{rewrite::{TreeNodeRewriter, RewriteRecursion, TreeNodeRewritable}, 
     ExecutionPlan, boolean::BooleanExec}, error::DataFusionError, 
     physical_expr::BooleanQueryExpr, 
-    arrow::{datatypes::Schema, array::{BooleanArray, ArrayRef}, record_batch::RecordBatch}, common::TermMeta, from_slice::FromSlice
+    arrow::{datatypes::Schema, array::{BooleanArray, ArrayRef, Array}, record_batch::RecordBatch}, common::TermMeta, from_slice::FromSlice
 };
 use datafusion::common::Result;
 use tracing::debug;
@@ -46,7 +46,7 @@ impl PhysicalOptimizerRule for MinOperationRange {
 
 #[derive(Clone)]
 struct GetMinRange {
-    partition_stats: Option<Vec<Vec<Option<TermMeta>>>>,
+    partition_stats: Option<Vec<Option<TermMeta>>>,
     partition_schema: Option<Arc<Schema>>,
     predicate: Option<Arc<BooleanQueryExpr>>,
     is_score: bool,
@@ -80,71 +80,43 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
             debug!("Pre_visit PostingExec");
             let projected_schema = self.partition_schema.as_ref().unwrap().clone();
             let project_terms: Vec<&str> = projected_schema.fields().into_iter().map(|f| f.name().as_str()).collect();
-            let partition_num = posting.output_partitioning().partition_count();
-            let term_stats: Vec<Vec<Option<TermMeta>>> = 
-                (0..partition_num).into_iter()
-                .map(|p| {
-                    posting.term_metas_of(&project_terms, p)
-                })
-                .collect();
+            let term_stats: Vec<Option<TermMeta>> = posting.term_metas_of(&project_terms);
             debug!("collect partition range");
             let partition_range: Vec<Arc<BooleanArray>> = (0..term_stats.len())
                 // .into_par_iter()
                 .into_iter()
                 .map(|p| {
-                    let mut range: Vec<ArrayRef> = Vec::new();
                     let mut length = None;
-                    debug!("Get length");
-                    for term in &term_stats[p] {
-                        if let Some(t) = term {
-                            length = Some(t.distribution().len());
-                            break;
+                    for v in &term_stats {
+                        if let Some(t) = v {
+                            length = t.distribution[p].as_ref().map(|v| v.len());
                         }
                     }
                     if let Some(length) = length {
-                        debug!("Collect Array");
-                        for t in &term_stats[p] {
-                            range.push(
-                                match t {
-                                    Some(t) => t.distribution().clone(),
-                                    None => Arc::new(BooleanArray::from(vec![false; length])),
-                                }
-                            )
-                        }
-                        debug!("New a batch");
+                        let empty_array = Arc::new(BooleanArray::from(vec![false; length]));
+                        let distris = term_stats.iter()
+                            .map(|t| {
+                                let res = match t {
+                                    Some(t) => match &t.distribution[p] {
+                                        Some(t) => t.clone(),
+                                        None => empty_array.clone(),
+                                    },
+                                    None => empty_array.clone(),
+                                };
+                                res as Arc<dyn Array>
+                            })
+                            .collect();
                         let batch = RecordBatch::try_new(
                             projected_schema.clone(),
-                            range,
+                            distris,
                         ).unwrap();
-                        debug!("Eval batch");
-                        let eval = self.predicate.as_ref().unwrap().eval(batch).unwrap();
-                        eval
+                        self.predicate.as_ref().unwrap().eval(batch).unwrap()
                     } else {
-                        Arc::new(BooleanArray::from_slice(&[]))
+                        Arc::new(BooleanArray::from(vec![] as Vec<bool>))
                     }
                 })
                 .collect();
             debug!("Collect term statistics");
-            let term_stats: Vec<Vec<Option<TermMeta>>> = term_stats
-                .into_iter()
-                .zip(partition_range.iter())
-                .enumerate()
-                .map(|(i, (s, d))| {
-                    let batch_size = posting.partitions[i][0].range().len();
-                    let selectivity = if d.len() == 0 { 0. } else {(d.true_count() / d.len()) as f64};
-                    s.into_iter()
-                    .map(|s| {
-                        match s {
-                            Some(mut s) => {
-                                s.selectivity = (s.nums as f64 * selectivity) /  batch_size as f64;
-                                Some(s)
-                            }
-                            None => None
-                        }
-                    })
-                    .collect()
-                })
-                .collect();
             self.min_range = Some(partition_range);
             self.partition_stats = Some(term_stats);
             debug!("End Pre_visit PostingExec");

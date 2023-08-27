@@ -34,10 +34,12 @@ impl PhysicalOptimizerRule for PartitionPredicateReorder {
                     if let Some(ref cnf) = predicate.cnf_predicates {
                         let reorder_predicate: HashMap<usize, Arc<dyn PhysicalExpr>> = stats
                         .iter()
-                        .map(|p| {
+                        .map(|_p| {
+                            // TODO
                             let mut cnf: Vec<Dnf> = cnf
                                 .iter()
-                                .map(|dnf| dnf.with_selectivity(p))
+                                .map(|dnf| dnf)
+                                .cloned()
                                 .collect();
                             cnf.sort_by(|l, r| l.selectivity().partial_cmp(&r.selectivity()).unwrap());
                             cnf
