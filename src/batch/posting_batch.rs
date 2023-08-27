@@ -480,7 +480,7 @@ impl TermMetaBuilder {
 
 
     pub fn build(self) -> TermMeta {
-        let (distribution, index) = (0..self.partition_num)
+        let (distribution, index): (Vec<Option<Arc<BooleanArray>>>, _)= (0..self.partition_num)
             .into_iter()
             .map(|v| {
                 if self.nums[v] == 0 {
@@ -492,11 +492,18 @@ impl TermMetaBuilder {
                 }
             })
             .unzip();
+        let valid_batch_num: usize = distribution.iter()
+            .map(|d| match d {
+                Some(v) => v.true_count(),
+                None => 0,
+            })
+            .sum();
+        let sel = self.nums.iter().map(|v| *v).sum::<u32>() as f64 / (512. * valid_batch_num as f64);
         TermMeta {
             distribution: Arc::new(distribution),
             index: Arc::new(index),
             nums: self.nums,
-            selectivity: 0.,
+            selectivity: sel,
         }
     }
 }
