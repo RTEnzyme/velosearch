@@ -18,7 +18,7 @@ use datafusion::{
 use futures::{future::BoxFuture, FutureExt};
 use tracing::{debug, trace};
 
-use crate::physical_expr::boolean_eval::{PhysicalPredicate, Primitives, SubPredicate};
+use crate::{physical_expr::boolean_eval::{PhysicalPredicate, Primitives, SubPredicate}, datasources::posting_table::PostingExec};
 
 /// Boolean physical query planner that converts a
 /// `LogicalPlan` to an `ExecutionPlan` suitable for execution.
@@ -129,6 +129,9 @@ impl BooleanPhysicalPlanner {
                     let physical_input = self.create_boolean_plan(&boolean.input, session_state).await?;
                     let input_schema = physical_input.as_ref().schema();
                     let input_dfschema = boolean.input.schema();
+                    let posting = physical_input.as_any().downcast_ref::<PostingExec>()
+                        .ok_or(DataFusionError::Plan(format!("The input of Boolean should be PostingTable")))?;
+                    
                     debug!("Create boolean predicate");
                     let runtime_expr = if let Expr::BooleanQuery(ref predicate) = boolean.binary_expr {
                         let op = match predicate.op {
@@ -141,7 +144,7 @@ impl BooleanPhysicalPlanner {
                             op,
                             right: predicate.right.clone(),
                         }), input_dfschema, &input_schema, session_state)?;
-                        // If the height of predicate is large than 5, choose Vectorized Boolean Query
+
                         debug!("Using code_gen");
                         let schema = boolean.input.schema();
                         let inputs: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
