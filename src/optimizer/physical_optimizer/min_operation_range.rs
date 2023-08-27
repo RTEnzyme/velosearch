@@ -6,8 +6,7 @@ use std::sync::Arc;
 use datafusion::{
     physical_optimizer::PhysicalOptimizerRule, 
     physical_plan::{rewrite::{TreeNodeRewriter, RewriteRecursion, TreeNodeRewritable}, 
-    ExecutionPlan, boolean::BooleanExec}, error::DataFusionError, 
-    physical_expr::BooleanQueryExpr, 
+    ExecutionPlan, boolean::BooleanExec, PhysicalExpr}, error::DataFusionError, 
     arrow::{datatypes::Schema, array::{BooleanArray, Array}, record_batch::RecordBatch}, common::TermMeta,
 };
 use datafusion::common::Result;
@@ -48,7 +47,7 @@ impl PhysicalOptimizerRule for MinOperationRange {
 struct GetMinRange {
     partition_stats: Option<Vec<Option<TermMeta>>>,
     partition_schema: Option<Arc<Schema>>,
-    predicate: Option<Arc<BooleanQueryExpr>>,
+    predicate: Option<Arc<dyn PhysicalExpr>>,
     is_score: bool,
     min_range: Option<Vec<Arc<BooleanArray>>>,
 }
@@ -73,7 +72,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
         if let Some(boolean) = any_node.downcast_ref::<BooleanExec>() {
             debug!("Pre_visit BooleanExec");
             self.partition_schema = Some(boolean.input.schema().clone());
-            self.predicate = Some(Arc::new(boolean.predicate().clone()));
+            self.predicate = Some(boolean.predicate().clone());
             self.is_score = boolean.is_score;
             Ok(RewriteRecursion::Continue)
         } else if let Some(posting) = any_node.downcast_ref::<PostingExec>(){
@@ -111,7 +110,16 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                             projected_schema.clone(),
                             distris,
                         ).unwrap();
-                        self.predicate.as_ref().unwrap().eval(batch).unwrap()
+                        Arc::new(
+                            self.predicate.as_ref()
+                            .unwrap()
+                            .evaluate(&batch)
+                            .unwrap()
+                            .into_array(0)
+                            .as_any()
+                            .downcast_ref::<BooleanArray>().unwrap()
+                            .to_owned()
+                        )
                     } else {
                         Arc::new(BooleanArray::from(vec![] as Vec<bool>))
                     }
@@ -146,13 +154,8 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
         } else if let Some(posting) = node.as_any().downcast_ref::<PostingExec>() {
             debug!("Mutate PostingExec");
             let min_range = self.min_range.take();
-            let mut exec = PostingExec::try_new(
-                posting.partitions.to_owned(),
-                posting.term_idx.to_owned(),
-                posting.schema.to_owned(),
-                posting.projection.to_owned(),
-                min_range,
-            )?;
+            let mut exec = posting.clone();
+            exec.partition_min_range = min_range;
             debug!("is_score: {}", self.is_score);
             exec.is_score = self.is_score;
             let exec = Arc::new(exec);

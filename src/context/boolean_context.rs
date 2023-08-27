@@ -14,7 +14,7 @@ use parking_lot::RwLock;
 use tokio::time::Instant;
 use tracing::debug;
 
-use crate::{query::boolean_query::BooleanQuery, utils::FastErr, BooleanPhysicalPlanner, IntersectionSelection, MinOperationRange, PartitionPredicateReorder, RewriteBooleanPredicate};
+use crate::{query::boolean_query::BooleanQuery, utils::FastErr, BooleanPhysicalPlanner, MinOperationRange, PartitionPredicateReorder, RewriteBooleanPredicate};
 use crate::utils::Result;
 
 #[derive(Clone)]
@@ -188,8 +188,8 @@ fn physical_optimizer_rulse() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync
     vec![
         // Arc::new(Repartition::new()),
         Arc::new(MinOperationRange::new()),
-        Arc::new(PartitionPredicateReorder::new()),
-        Arc::new(IntersectionSelection::new()),
+        // Arc::new(PartitionPredicateReorder::new()),
+        // Arc::new(IntersectionSelection::new()),
         // Arc::new(EnforceDistribution::new()),
         // Arc::new(CoalesceBatches::new()),
         // Arc::new(PipelineChecker::new())

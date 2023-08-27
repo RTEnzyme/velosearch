@@ -10,15 +10,14 @@ use datafusion::{
         logical_expr::{
             LogicalPlan, expr::BooleanQuery, BinaryExpr, PlanType, ToStringifiedPlan, Projection, TableScan, StringifiedPlan, Operator, logical_plan::Predicate
         },
-        physical_expr::boolean_query_with_cnf,
-        common::DFSchema, arrow::datatypes::{Schema, SchemaRef}, 
+        common::{DFSchema, TermMeta}, arrow::datatypes::{Schema, SchemaRef}, 
         prelude::Expr, physical_expr::execution_props::ExecutionProps, datasource::source_as_provider, 
         physical_optimizer::PhysicalOptimizerRule
     };
 use futures::{future::BoxFuture, FutureExt};
 use tracing::{debug, trace};
 
-use crate::{physical_expr::boolean_eval::{PhysicalPredicate, Primitives, SubPredicate}, datasources::posting_table::PostingExec};
+use crate::{physical_expr::{boolean_eval::{PhysicalPredicate, Primitives, SubPredicate}, BooleanEvalExpr}, datasources::posting_table::PostingExec};
 
 /// Boolean physical query planner that converts a
 /// `LogicalPlan` to an `ExecutionPlan` suitable for execution.
@@ -127,42 +126,32 @@ impl BooleanPhysicalPlanner {
                 LogicalPlan::Boolean(boolean) => {
                     debug!("Create boolean plan");
                     let physical_input = self.create_boolean_plan(&boolean.input, session_state).await?;
-                    let input_schema = physical_input.as_ref().schema();
-                    let input_dfschema = boolean.input.schema();
-                    let posting = physical_input.as_any().downcast_ref::<PostingExec>()
-                        .ok_or(DataFusionError::Plan(format!("The input of Boolean should be PostingTable")))?;
+                    let mut posting = physical_input.as_any().downcast_ref::<PostingExec>()
+                        .ok_or(DataFusionError::Plan(format!("The input of Boolean should be PostingTable")))?.to_owned();
                     
                     debug!("Create boolean predicate");
-                    let runtime_expr = if let Expr::BooleanQuery(ref predicate) = boolean.binary_expr {
-                        let op = match predicate.op {
-                            Operator::BitwiseAnd => Operator::And,
-                            Operator::BitwiseOr => Operator::Or,
-                            _ => unreachable!(),
-                        };
-                        let binary_expr = self.create_physical_expr(&Expr::BinaryExpr(BinaryExpr{
-                            left: predicate.left.clone(),
-                            op,
-                            right: predicate.right.clone(),
-                        }), input_dfschema, &input_schema, session_state)?;
-
-                        debug!("Using code_gen");
+                    let runtime_expr: Arc<dyn PhysicalExpr> = if let Some(ref predicate) = boolean.predicate {
                         let schema = boolean.input.schema();
                         let inputs: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-                        let term2idx: HashMap<&str, i64> = inputs
+                        let (term2idx,
+                            (term_metas,
+                            term2sel)): (HashMap<&str, usize>, (Vec<Option<TermMeta>>, HashMap<&str, f64>)) = inputs
                             .into_iter()
                             .enumerate()
-                            .map(|(i, s)| (s, i as i64))
-                            .collect(); 
-                        let mut cnf_predicates = CnfPredicate::new(
-                            &predicate,
-                            term2idx,
-                        );
-                        cnf_predicates.flatten_cnf_predicate();
-                        let cnf_predicates = cnf_predicates.collect();
-                        boolean_query_with_cnf(cnf_predicates, binary_expr, &input_schema)
+                            .map(|(i, s)| {
+                                let term_meta = posting.term_meta_of(s);
+                                let sel = term_meta.as_ref().map(|v| v.selectivity).unwrap_or(1.);
+                                ((s, i), (term_meta, (s, sel)))
+                            })
+                            .unzip();
+                        posting.projected_term_meta = term_metas;
+                        let builder = PhysicalPredicateBuilder::new(predicate, term2idx, term2sel);
+                        let physical_predicate = builder.build()?;
+                        Arc::new(BooleanEvalExpr::new(Arc::new(physical_predicate)))
                     } else {
                         unreachable!()
-                    }?;
+                    };
+                    
                     debug!("Optimize predicate on every partition");
                     // Should Optimize predicate on every partition.
                     let num_partition = physical_input.output_partitioning().partition_count();
@@ -170,7 +159,7 @@ impl BooleanPhysicalPlanner {
                         .map(|v| (v, runtime_expr.clone()))
                         .collect();
                     debug!("Finish creating boolean physical plan. Is_score: {}", boolean.is_score);
-                    Ok(Arc::new(BooleanExec::try_new(partition_predicate, physical_input, None, boolean.is_score)?))
+                    Ok(Arc::new(BooleanExec::try_new(partition_predicate, Arc::new(posting), None, boolean.is_score)?))
                 }
                 LogicalPlan::Analyze(a) => {
                     let input = self.create_boolean_plan(&a.input, session_state).await?;
@@ -418,59 +407,6 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
         (Err(e), Ok(_)) => Err(e),
         (Ok(_), Err(e1)) => Err(e1),
         (Err(e), Err(_)) => Err(e),
-    }
-}
-
-struct CnfPredicate<'a> {
-    root: &'a BooleanQuery,
-    predicates: Vec<Vec<i64>>,
-    idx: usize,
-    term2idx: HashMap<&'a str, i64>,
-}
-
-impl<'a> CnfPredicate<'a> {
-    fn new(root: &'a BooleanQuery, term2idx: HashMap<&'a str, i64>) -> Self {
-        Self {
-            root,
-            predicates: Vec::new(),
-            idx: 0,
-            term2idx,
-        }
-    }
-
-    fn flatten_cnf_predicate(&mut self) {
-        self.flatten_impl(&self.root.left);
-        self.flatten_impl(&self.root.right);
-    }
-
-    fn flatten_impl(&mut self, expr: &Expr) {
-        if let Expr::BooleanQuery(boolean) = expr {
-            if boolean.op == Operator::BitwiseAnd {
-                self.flatten_impl(&boolean.left);
-                self.flatten_impl(&boolean.right);
-            } else if boolean.op == Operator::BitwiseOr {
-                self.predicates.push(vec![]);
-                self.append_or_expr(&boolean.left);
-                self.append_or_expr(&boolean.right);
-                self.idx += 1;
-            }
-        } else {
-            self.predicates.push(vec![self.term2idx[expr.to_string().as_str()]])
-        }
-    }
-
-    fn append_or_expr(&mut self, e: &Expr) {
-        match e {
-            Expr::BooleanQuery(boolean) => {
-                self.append_or_expr(&boolean.left);
-                self.append_or_expr(&boolean.right);
-            }
-            _ => self.predicates[self.idx].push(self.term2idx[e.to_string().as_str()])
-        }
-    }
-
-    fn collect(self) -> Vec<Vec<i64>> {
-        self.predicates
     }
 }
 

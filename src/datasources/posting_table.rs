@@ -88,6 +88,7 @@ impl TableProvider for PostingTable {
             self.schema(), 
             projection.cloned(),
             None,
+            vec![],
         )?))
     }
 }
@@ -212,14 +213,9 @@ impl PostingExec {
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
         partition_min_range: Option<Vec<Arc<BooleanArray>>>,
+        projected_term_meta: Vec<Option<TermMeta>>,
     ) -> Result<Self> {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
-        let projected_term_meta = projected_schema.as_ref()
-            .fields()
-            .into_iter()
-            .filter(|f| f.name().as_str() != "__id__")
-            .map(|f| term_idx.get(f.name().as_str()))
-            .collect();
         Ok(Self {
             partitions: partitions,
             term_idx,
@@ -242,6 +238,11 @@ impl PostingExec {
                 term_idx.get(t)
             })
             .collect()
+    }
+
+    /// Get TermMeta From &str
+    pub fn term_meta_of(&self, term: &str) -> Option<TermMeta> {
+        self.term_idx.get(term)
     }
 }
 
