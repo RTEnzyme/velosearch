@@ -16,7 +16,7 @@ pub mod batch;
 pub mod physical_expr;
 pub use utils::Result;
 pub use context::BooleanContext;
-pub use optimizer::{BooleanPhysicalPlanner, IntersectionSelection, MinOperationRange, PartitionPredicateReorder, RewriteBooleanPredicate};
+pub use optimizer::{BooleanPhysicalPlanner, MinOperationRange, PartitionPredicateReorder, RewriteBooleanPredicate};
 pub use physical_expr::ShortCircuit;
 use clap::{Parser, ValueEnum};
 
