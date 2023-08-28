@@ -148,7 +148,7 @@ impl BooleanPhysicalPlanner {
                         posting.projected_term_meta = term_metas;
                         let builder = PhysicalPredicateBuilder::new(predicate, term2idx, term2sel);
                         let physical_predicate = builder.build()?;
-                        Arc::new(BooleanEvalExpr::new(Arc::new(physical_predicate)))
+                        Arc::new(BooleanEvalExpr::new(physical_predicate))
                     } else {
                         unreachable!()
                     };

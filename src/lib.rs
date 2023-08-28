@@ -2,6 +2,7 @@
 #![feature(portable_simd)]
 #![feature(stdsimd)]
 #![feature(is_sorted)]
+#![feature(sync_unsafe_cell)]
 
 extern crate datafusion;
 

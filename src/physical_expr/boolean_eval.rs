@@ -1,4 +1,4 @@
-use std::{sync::Arc, any::Any};
+use std::{sync::Arc, any::Any, cell::SyncUnsafeCell};
 
 use datafusion::{physical_plan::{expressions::{BinaryExpr, Column}, PhysicalExpr, ColumnarValue}, arrow::{datatypes::{Schema, DataType}, record_batch::RecordBatch}, error::DataFusionError, common::Result};
 
@@ -167,12 +167,14 @@ impl PhysicalPredicate {
 /// Combined Primitives Expression
 #[derive(Debug, Clone)]
 pub struct BooleanEvalExpr {
-    pub predicate: Arc<PhysicalPredicate>,
+    pub predicate: Arc<SyncUnsafeCell<PhysicalPredicate>>,
 }
 
 impl BooleanEvalExpr {
-    pub fn new(predicate: Arc<PhysicalPredicate>) -> Self {
-        Self { predicate }
+    pub fn new(predicate: PhysicalPredicate) -> Self {
+        Self {
+            predicate: Arc::new(SyncUnsafeCell::new(predicate)),
+        }
     }
 }
 
@@ -197,14 +199,16 @@ impl PhysicalExpr for BooleanEvalExpr {
     
     fn evaluate(&self, batch: &RecordBatch) -> datafusion::common::Result<ColumnarValue> {
         let batch_len = batch.num_rows();
-        match self.predicate.as_ref() {
+        let predicate = self.predicate.as_ref().get();
+        let predicate_ref = unsafe {predicate.as_ref().unwrap() };
+        match predicate_ref {
             PhysicalPredicate::And { .. } => {
-                let res = self.predicate.eval(batch, vec![u8::MAX; batch_len], true)?;
+                let res = predicate_ref.eval(batch, vec![u8::MAX; batch_len], true)?;
                 let array = Arc::new(build_boolean_array(res, batch_len));
                 Ok(ColumnarValue::Array(array))
             }
             PhysicalPredicate::Or { .. } => {
-                let res = self.predicate.eval(batch, vec![u8::MAX; batch_len], false)?;
+                let res = predicate_ref.eval(batch, vec![u8::MAX; batch_len], false)?;
                 let array = Arc::new(build_boolean_array(res, batch_len));
                 Ok(ColumnarValue::Array(array))
             }
@@ -306,7 +310,7 @@ mod tests {
                 sub_predicate2,
             ]
         };
-        let res = BooleanEvalExpr::new(Arc::new(physical_predicate)).evaluate(&batch).unwrap().into_array(0);
+        let res = BooleanEvalExpr::new(physical_predicate).evaluate(&batch).unwrap().into_array(0);
         let res = unsafe { res.data().buffers()[0].align_to::<u8>().1 };
         println!("left: {:b}, right: {:b}", res[0], expect[0]);
         assert_eq!(res, &expect);
