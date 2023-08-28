@@ -24,11 +24,18 @@ impl Primitives {
 
 #[derive(Clone, Debug)]
 pub struct SubPredicate {
+    /// The children nodes of physical predicate
     pub sub_predicate: PhysicalPredicate,
-    node_num: usize,
-    leaf_num: usize,
-    selectivity: f64,
-    rank: f64,
+    /// Node num
+    pub node_num: usize,
+    /// Leaf num
+    pub leaf_num: usize,
+    /// The selectivity of this node
+    pub selectivity: f64,
+    /// The rank of this node, calculate by $$\frac{sel - 1}{leaf_num}$$
+    pub rank: f64,
+    /// The cumulative selectivity
+    pub cs: f64,
 }
 
 impl SubPredicate {
@@ -38,6 +45,7 @@ impl SubPredicate {
         leaf_num: usize,
         selectivity: f64,
         rank: f64,
+        cs: f64,
     ) -> Self {
         Self {
             sub_predicate,
@@ -45,13 +53,14 @@ impl SubPredicate {
             leaf_num,
             selectivity,
             rank,
+            cs,
         }
     }
 
     pub fn new_with_predicate(
         sub_predicate: PhysicalPredicate
     ) -> Self {
-        Self::new(sub_predicate, 0, 0, 0., 0.)
+        Self::new(sub_predicate, 0, 0, 0., 0., 0.)
     }
 
     pub fn node_num(&self) -> usize {

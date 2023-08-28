@@ -138,6 +138,7 @@ impl BooleanPhysicalPlanner {
                             term2sel)): (HashMap<&str, usize>, (Vec<Option<TermMeta>>, HashMap<&str, f64>)) = inputs
                             .into_iter()
                             .enumerate()
+                            .filter(|(_, s)| *s != "__id__")
                             .map(|(i, s)| {
                                 let term_meta = posting.term_meta_of(s);
                                 let sel = term_meta.as_ref().map(|v| v.selectivity).unwrap_or(1.);
@@ -445,6 +446,11 @@ impl<'a> PhysicalPredicateBuilder<'a> {
                 }
                 let rank = (sel - 1.) / leaf_num as f64;
                 nodes.sort_by(|l, r| l.rank().partial_cmp(&r.rank()).unwrap());
+                let mut cs: f64 = 1.;
+                for node in &mut nodes {
+                    node.cs = 1. - (1. - cs).powi(8);
+                    cs *= node.sel();
+                }
                 let physical_predicate = PhysicalPredicate::And { args: nodes };
                 Ok(SubPredicate::new(
                     physical_predicate,
@@ -452,6 +458,7 @@ impl<'a> PhysicalPredicateBuilder<'a> {
                     leaf_num,
                     sel,
                     rank,
+                    1.,
                 ))
             }
             Predicate::Or { args } => {
@@ -474,13 +481,14 @@ impl<'a> PhysicalPredicateBuilder<'a> {
                     leaf_num,
                     sel,
                     rank,
+                    1.,
                 ))
             }
             Predicate::Other { expr } => {
                 let expr_name = expr.display_name()?;
                 let sel = self.term2sel[expr_name.as_str()];
                 let predicate = PhysicalPredicate::Leaf { primitive: Primitives::ColumnPrimitive(Column::new(expr_name.as_str(), *self.term2idx.get(expr_name.as_str()).unwrap())) };
-                Ok(SubPredicate::new(predicate, 1, 1, sel, sel - 1.))
+                Ok(SubPredicate::new(predicate, 1, 1, sel, sel - 1., 1.))
             }
         }
     }

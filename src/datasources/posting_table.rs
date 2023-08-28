@@ -272,6 +272,7 @@ impl PostingStream {
 
         let schema_async = schema.clone();
         debug!("is_score: {:?}", is_score);
+        debug!("distri_len: {:?}", distri.len());
         let valid_data = async move {
             let distr: Vec<UInt16Array> = distri.into_iter()
                 .map(|f| match f {

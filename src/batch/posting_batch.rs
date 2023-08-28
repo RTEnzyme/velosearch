@@ -1,6 +1,7 @@
 use std::{sync::{Arc, RwLock}, ops::Index, collections::{HashMap, BTreeMap}, cmp::max, mem::size_of_val, ptr::NonNull};
 
 use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray}, record_batch::RecordBatch, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
+use tracing::debug;
 use crate::utils::{Result, FastErr};
 
 /// The doc_id range [start, end) Batch range determines the  of relevant batch.
@@ -191,6 +192,7 @@ impl PostingBatch {
     }
 
     pub fn project_fold_with_freqs(&self, indices: &[Option<usize>], projected_schema: SchemaRef) -> Result<RecordBatch> {
+        debug!("indices len: {:?}", indices.len());
         // Add freqs fields
         let mut fields = projected_schema.fields().clone();
         let mut freqs = fields
@@ -243,7 +245,9 @@ impl PostingBatch {
             }
         }
         batches.insert(projected_schema.index_of("__id__").expect("Should have __id__ field"), Arc::new(UInt32Array::from_slice([])));
+        debug!("freq_len: {:?}", freqs.len());
         batches.extend(freqs.into_iter());
+        debug!("batch_len: {:?}, schema_len: {:?}", batches.len(), fields.len());
         // Update: Don't add array for __id__
         let projected_schema = Arc::new(Schema::new(fields));
         Ok(RecordBatch::try_new(
