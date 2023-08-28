@@ -4,8 +4,9 @@
 use std::sync::Arc;
 
 use datafusion::{physical_optimizer::PhysicalOptimizerRule, physical_plan::{ExecutionPlan, boolean::BooleanExec}};
+use tracing::debug;
 
-use crate::physical_expr::BooleanEvalExpr;
+use crate::{physical_expr::{BooleanEvalExpr, boolean_eval::{PhysicalPredicate, SubPredicate}, Primitives}, JIT_MAX_NODES, ShortCircuit};
 
 /// PrimitivesCombination optimizer that optimizes the combination of 
 /// bitwise primitives and short-circuit primitive.
@@ -26,11 +27,12 @@ impl PhysicalOptimizerRule for PrimitivesCombination {
         _config: &datafusion::config::ConfigOptions,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         if let Some(boolean) = plan.as_any().downcast_ref::<BooleanExec>() {
-            let predicate = boolean.predicate[&0].clone();
-            let predicate = predicate.as_any().downcast_ref::<BooleanEvalExpr>();
-            match predicate {
+            let boolean_eval = boolean.predicate[&0].clone();
+            let boolean_eval = boolean_eval.as_any().downcast_ref::<BooleanEvalExpr>();
+            match boolean_eval {
                 Some(p) => {
-                    
+                    let predicate = p.predicate.as_ref().get();
+                    optimize_predicate_inner(unsafe{predicate.as_mut()}.unwrap());
                     Ok(plan)
                 }
                 None => Ok(plan)
@@ -46,5 +48,63 @@ impl PhysicalOptimizerRule for PrimitivesCombination {
 
     fn schema_check(&self) -> bool {
         false
+    }
+}
+
+fn optimize_predicate_inner(predicate: &mut PhysicalPredicate) {
+    match predicate {
+        PhysicalPredicate::And { args } => {
+            // The first level is `AND`.
+            let mut node_num = 0;
+            let mut leaf_num = 0;
+            let mut cum_instructions = 0;
+            let mut cnf = Vec::new();
+            let mut idx = args.len() - 1;
+            let mut optimized_args = Vec::new();
+            for node in args.iter_mut().rev() {
+                if node.node_num() >= JIT_MAX_NODES {
+                    // If this node oversize the JIT_MAX_NDOES, skip this node
+                    optimize_predicate_inner(&mut node.sub_predicate);
+                    optimized_args.push(SubPredicate::new_with_predicate(node.sub_predicate.to_owned()));
+                    idx -= 1;
+                    continue;
+                }
+                if node_num + node.node_num() > JIT_MAX_NODES {
+                    // The number of cumulative node is larger than AOT node num.
+                    // So it should compact to short-circuit primitive
+                    let primitive = Primitives::ShortCircuitPrimitive(ShortCircuit::new(&cnf, node_num, leaf_num));
+                    optimized_args.push(SubPredicate::new_with_predicate(PhysicalPredicate::Leaf { primitive }));
+                    cnf.clear();
+                    node_num = 0;
+                    leaf_num = 0;
+                    cum_instructions = 0;
+                    idx -= 1;
+                    continue;
+                }
+                cum_instructions += node.leaf_num - 1;
+                // If cpo > threshold, end this optimization stage
+                if (cum_instructions as f64 + node.cs) / (leaf_num as f64 - 1.) > 0.5 {
+                    idx -= 1;
+                    let primitive = Primitives::ShortCircuitPrimitive(ShortCircuit::new(&cnf, node_num, leaf_num));
+                    optimized_args.push(SubPredicate::new_with_predicate(PhysicalPredicate::Leaf { primitive }));
+                    break;
+                }
+                cnf.push(&node.sub_predicate);
+                node_num += node.node_num();
+                leaf_num += node.leaf_num();
+                idx -= 1;
+            }
+            args.truncate(idx + 1);
+            args.append(&mut optimized_args)
+        }
+        PhysicalPredicate::Or { args } => {
+            for arg in args {
+                optimize_predicate_inner(&mut arg.sub_predicate);
+            }
+        }
+        PhysicalPredicate::Leaf { .. } => {
+            // The first level is only one node.
+            debug!("Skip optimize predicate because the first level is only one node.");
+        }
     }
 }

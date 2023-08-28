@@ -5,6 +5,8 @@ use datafusion::{physical_plan::{PhysicalExpr, ColumnarValue}, arrow::{datatypes
 use crate::jit::{ast::{Predicate, Boolean}, jit_short_circuit};
 use crate::utils::Result;
 
+use super::{boolean_eval::PhysicalPredicate, Primitives};
+
 #[derive(Debug, Clone)]
 pub struct ShortCircuit {
     batch_idx: Vec<usize>,
@@ -32,6 +34,15 @@ impl ShortCircuit {
             batch_idx,
             primitive,
         })
+    }
+
+    pub fn new(
+        cnf: &Vec<&PhysicalPredicate>,
+        node_num: usize,
+        leaf_num: usize,
+    ) -> Self {
+        let (predicate, batch_idx) = convert_predicate(&cnf);
+        Self::try_new(batch_idx, predicate, node_num + 1, leaf_num, 0).unwrap()
     }
 
     pub fn eval(&self, init_v: &mut Vec<u8>, batch: &RecordBatch) -> Vec<u8> {
@@ -120,6 +131,51 @@ fn build_boolean_array(mut res: Vec<u8>, array_len: usize) -> BooleanArray {
 
     let array_data = unsafe { builder.build_unchecked() };
     BooleanArray::from(array_data)
+}
+
+fn convert_predicate(cnf: &Vec<&PhysicalPredicate>) -> (Predicate, Vec<usize>) {
+    let mut batch_idx = Vec::new();
+    let mut predicates = Vec::new();
+    let mut start_idx = 0;
+    for forumla in cnf.into_iter().rev() {
+        predicates.push(physical_2_logical(&forumla, &mut batch_idx, &mut start_idx));
+    }
+    let predicate = Predicate::And { args: predicates };
+    (predicate, batch_idx)
+}
+
+fn physical_2_logical(
+    physical_predicate: &PhysicalPredicate,
+    batch_idx: &mut Vec<usize>,
+    start_idx: &mut usize,
+) -> Predicate {
+    match physical_predicate {
+        PhysicalPredicate::And { args } => {
+            let mut predicates = Vec::new();
+            for arg in args {
+                predicates.push(physical_2_logical(&arg.sub_predicate, batch_idx, start_idx));
+                *start_idx += 1;
+            }
+            Predicate::And { args: predicates }
+        }
+        PhysicalPredicate::Or { args } => {
+            let mut predicates = Vec::new();
+            for arg in args {
+                predicates.push(physical_2_logical(&arg.sub_predicate, batch_idx, start_idx));
+                *start_idx += 1;
+            }
+            Predicate::Or { args: predicates }
+        }
+        PhysicalPredicate::Leaf { primitive } => {
+            let idx = if let Primitives::ColumnPrimitive(c) = primitive {
+                c.index()
+            } else {
+                unreachable!("The subtree of a short-circuit primitive must have not other exprs");
+            };
+            batch_idx.push(idx);
+            Predicate::Leaf { idx: *start_idx }
+        }
+    }
 }
 
 #[cfg(test)]
