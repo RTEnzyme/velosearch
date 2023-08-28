@@ -443,8 +443,16 @@ impl<'a> PhysicalPredicateBuilder<'a> {
                     sel *= sub_predicate.sel();
                     nodes.push(sub_predicate);
                 }
+                let rank = (sel - 1.) / leaf_num as f64;
+                nodes.sort_by(|l, r| l.rank().partial_cmp(&r.rank()).unwrap());
                 let physical_predicate = PhysicalPredicate::And { args: nodes };
-                Ok(SubPredicate::new(physical_predicate, node_num, leaf_num, sel))
+                Ok(SubPredicate::new(
+                    physical_predicate,
+                    node_num,
+                    leaf_num,
+                    sel,
+                    rank,
+                ))
             }
             Predicate::Or { args } => {
                 let mut nodes = vec![];
@@ -459,13 +467,20 @@ impl<'a> PhysicalPredicateBuilder<'a> {
                     nodes.push(sub_predicate);
                 }
                 let physical_predicate = PhysicalPredicate::Or { args: nodes };
-                Ok(SubPredicate::new(physical_predicate, node_num + 1, leaf_num, sel))
+                let rank = (sel - 1.) / leaf_num as f64;
+                Ok(SubPredicate::new(
+                    physical_predicate,
+                    node_num + 1,
+                    leaf_num,
+                    sel,
+                    rank,
+                ))
             }
             Predicate::Other { expr } => {
                 let expr_name = expr.display_name()?;
                 let sel = self.term2sel[expr_name.as_str()];
                 let predicate = PhysicalPredicate::Leaf { primitive: Primitives::ColumnPrimitive(Column::new(expr_name.as_str(), *self.term2idx.get(expr_name.as_str()).unwrap())) };
-                Ok(SubPredicate::new(predicate, 1, 1, sel))
+                Ok(SubPredicate::new(predicate, 1, 1, sel, sel - 1.))
             }
         }
     }

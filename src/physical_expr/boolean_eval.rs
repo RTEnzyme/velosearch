@@ -28,9 +28,32 @@ pub struct SubPredicate {
     node_num: usize,
     leaf_num: usize,
     selectivity: f64,
+    rank: f64,
 }
 
 impl SubPredicate {
+    pub fn new(
+        sub_predicate: PhysicalPredicate,
+        node_num: usize,
+        leaf_num: usize,
+        selectivity: f64,
+        rank: f64,
+    ) -> Self {
+        Self {
+            sub_predicate,
+            node_num,
+            leaf_num,
+            selectivity,
+            rank,
+        }
+    }
+
+    pub fn new_with_predicate(
+        sub_predicate: PhysicalPredicate
+    ) -> Self {
+        Self::new(sub_predicate, 0, 0, 0., 0.)
+    }
+
     pub fn node_num(&self) -> usize {
         self.node_num
     }
@@ -42,27 +65,9 @@ impl SubPredicate {
     pub fn sel(&self) -> f64 {
         self.selectivity
     }
-}
 
-impl SubPredicate {
-    pub fn new(
-        sub_predicate: PhysicalPredicate,
-        node_num: usize,
-        leaf_num: usize,
-        selectivity: f64,
-    ) -> Self {
-        Self {
-            sub_predicate,
-            node_num,
-            leaf_num,
-            selectivity,
-        }
-    }
-
-    pub fn new_with_predicate(
-        sub_predicate: PhysicalPredicate
-    ) -> Self {
-        Self::new(sub_predicate, 0, 0, 0.0)
+    pub fn rank(&self) -> f64 {
+        self.rank
     }
 }
 
