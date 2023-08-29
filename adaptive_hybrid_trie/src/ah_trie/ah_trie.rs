@@ -1,4 +1,4 @@
-use std::{sync::atomic::{AtomicUsize, Ordering}, collections::HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dashmap::{DashMap, DashSet};
 use fst_rs::FST;
@@ -24,7 +24,7 @@ pub struct AHTrie<T: Clone+Send+Sync> {
     /// A tokio runtime for executing synchronous operation
     // rt: Runtime,
     skip_length: usize,
-    epoch: AtomicUsize,
+    _epoch: AtomicUsize,
     sample_size: usize,
     // Record access term list in this epoch
     access_list: Arc<DashSet<String>>,
@@ -54,7 +54,7 @@ impl<T: Clone+Send+Sync+'static> AHTrie<T> {
         Self {
             // rt,
             skip_length,
-            epoch: AtomicUsize::new(0),
+            _epoch: AtomicUsize::new(0),
             sample_size: sample_size,
             access_list: Arc::new(DashSet::new()),
             sampling_stat: Arc::new(DashMap::new()),
