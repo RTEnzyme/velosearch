@@ -61,6 +61,6 @@ harness = false
 name = "bitmap_vs_sorted"
 harness = false
 
-[[bench]]
-name = "vectorized_codegen"
-harness = false
+#[[bench]]
+#name = "vectorized_codegen"
+#harness = false
