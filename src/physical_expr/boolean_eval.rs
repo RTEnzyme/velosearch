@@ -238,39 +238,6 @@ impl PartialEq<dyn Any> for BooleanEvalExpr {
     }
 }
 
-struct LoudsBuilder {
-    node_num: usize,
-    pos: usize,
-    has_child: u16,
-    louds: u16,
-}
-
-impl LoudsBuilder {
-    fn new(node_num: usize)  -> Self {
-        assert!(node_num < 14, "Only supports building LOUDS with less 14 nodes");
-        Self {
-            node_num,
-            pos: 0,
-            has_child: 0,
-            louds: 0,
-        }
-    }
-}
-
-fn predicate_2_louds(predicate: &PhysicalPredicate, builder: &mut LoudsBuilder) {
-    match predicate {
-        PhysicalPredicate::And { args } => {
-
-        }
-        PhysicalPredicate::Or { args } => {
-
-        }
-        PhysicalPredicate::Leaf { primitive } => {
-            
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{ptr::NonNull, sync::Arc};

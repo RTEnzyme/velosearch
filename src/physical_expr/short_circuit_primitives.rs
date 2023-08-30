@@ -2,7 +2,7 @@ use std::{any::Any, ptr::NonNull, sync::Arc};
 
 use datafusion::{physical_plan::{PhysicalExpr, ColumnarValue}, arrow::{datatypes::DataType, record_batch::RecordBatch, array::{BooleanArray, ArrayData}, buffer::Buffer}, error::DataFusionError};
 
-use crate::jit::{ast::{Predicate, Boolean}, jit_short_circuit};
+use crate::{jit::{ast::{Predicate, Boolean}, jit_short_circuit}, JIT_MAX_NODES};
 use crate::utils::Result;
 
 use super::{boolean_eval::PhysicalPredicate, Primitives};
@@ -22,7 +22,7 @@ impl ShortCircuit {
         start_idx: usize,
     ) -> Result<Self> {
         // let primitive = if node_num <= JIT_MAX_NODES {
-        //     // Seek the AOT compilation
+            // Seek the AOT compilation
         //     unimplemented!()
         // } else {
         //     // JIT compilation the BooleanOpTree
@@ -41,6 +41,12 @@ impl ShortCircuit {
         node_num: usize,
         leaf_num: usize,
     ) -> Self {
+        if node_num <= JIT_MAX_NODES {
+            let mut builder = LoudsBuilder::new(node_num);
+            predicate_2_louds(cnf[0], &mut builder);
+            let louds = builder.build();
+            unimplemented!()
+        }
         let (predicate, batch_idx) = convert_predicate(&cnf);
         Self::try_new(batch_idx, predicate, node_num + 1, leaf_num, 0).unwrap()
     }
@@ -174,6 +180,76 @@ fn physical_2_logical(
             };
             batch_idx.push(idx);
             Predicate::Leaf { idx: *start_idx }
+        }
+    }
+}
+
+struct LoudsBuilder {
+    node_num: usize,
+    pos: usize,
+    has_child: u16,
+    louds: u16,
+}
+
+impl LoudsBuilder {
+    fn new(node_num: usize)  -> Self {
+        assert!(node_num < 14, "Only supports building LOUDS with less 14 nodes");
+        Self {
+            node_num,
+            pos: 0,
+            has_child: 0,
+            louds: 0,
+        }
+    }
+
+    fn set_haschild(&mut self, has_child: bool) {
+        self.has_child |= 1 << self.pos;
+    }
+
+    fn set_louds(&mut self, louds: bool) {
+        self.louds |= 1 << self.pos;
+    }
+
+    fn next(&mut self) {
+        self.pos += 1;
+    }
+
+    fn build(self) -> u32 {
+        let mut louds = (self.node_num as u32) << 28;
+        louds |= (self.louds as u32) << 14;
+        louds |= self.has_child as u32;
+        louds
+    }
+}
+
+fn predicate_2_louds(predicate: &PhysicalPredicate, builder: &mut LoudsBuilder) {
+    match predicate {
+        PhysicalPredicate::And { args } => {
+            // This node is `AND` node, so it has children.
+            builder.set_haschild(true);
+            // The LOUDS of first child node is Set bit.
+            builder.next();
+            builder.set_louds(true);
+            for child in &args[1..] {
+                builder.next();
+                builder.set_louds(false);
+                predicate_2_louds(&child.sub_predicate, builder);
+            }
+        }
+        PhysicalPredicate::Or { args } => {
+            // This node is `OR` node, so it has children.
+            builder.set_haschild(true);
+            // The LOUDS of first child node is Set.
+            builder.next();
+            builder.set_louds(true);
+            for child in &args[1..] {
+                builder.next();
+                builder.set_louds(false);
+                predicate_2_louds(&child.sub_predicate, builder);
+            }
+        }
+        PhysicalPredicate::Leaf { .. } => {
+            builder.set_haschild(false);
         }
     }
 }
