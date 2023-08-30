@@ -1,5 +1,8 @@
 //! Compile Expr to JIT'd function
 
+use tracing::debug;
+
+use crate::jit::ast::Predicate;
 use crate::utils::Result;
 use super::Boolean;
 use super::api::Assembler;
@@ -113,12 +116,103 @@ pub fn jit_short_circuit_primitive(
 
 }
 
-/// Convert the Louds encoding to JIT expr
-pub fn louds_2_boolean(node_num: usize, has_child: Vec<u8>, louds: Vec<u8>) -> Boolean {
-    // Unexpected condition:
-    // 1. the top level has only one node.
-    
-    unimplemented!()
+#[derive(Debug)]
+pub struct Louds2Boolean {
+    look_up: Vec<usize>,
+    louds: u16,
+    has_child: u16,
+    node_num: usize,
+    idx: usize,
+}
+
+impl Louds2Boolean {
+    pub fn new(louds: u32) -> Self {
+        // Unexpected condition:
+        // 1. the top level has only one node.
+        let node_num = (louds >> 28) as usize;
+        let has_child = (louds & ((1 << node_num) - 1)) as u16;
+        let louds = (louds >> 14  & ((1 << node_num) - 1)) as u16;
+        let mut look_up: Vec<usize> = Vec::new();
+        for i in 0..(node_num as usize) {
+            if louds & 1 << i != 0 {
+                look_up.push(i);
+            }
+        }
+        debug!("louds: {:b}", louds);
+        debug!("has_child: {:b}", has_child);
+        debug!("node_num: {:}", node_num);
+        Self {
+            look_up,
+            louds,
+            has_child,
+            node_num,
+            idx: 0,
+        }
+    }
+
+    pub fn build(&mut self) -> Option<Boolean> {
+        match self.recursive_construct(0, true) {
+            Ok(p) => match p {
+                Some(p) => Some(Boolean { predicate: p, start_idx: 0 }),
+                None => None,
+            },
+            Err(_) => None,
+        }
+    }
+
+    pub fn recursive_construct(&mut self, pos: usize, is_and: bool) -> std::result::Result<Option<Predicate>, ()> {
+        if pos >= self.node_num {
+            return Ok(None);
+        }
+        let mut predicates: Vec<Predicate> = Vec::new();
+        let mut pos = pos;
+        let mut indicator = 1 << pos;
+        if self.louds & indicator == 0 {
+            // obey the Louds rule.
+            return Err(());
+        }
+        let mut is_first = true;
+        while is_first || pos < self.node_num && self.louds & indicator == 0 {
+            if is_first {
+                is_first = false;
+            }
+            if self.has_child & indicator != 0 {
+                // r = rank(S-HasChild, pos) + 1;
+                // select(louds, r);
+                let r = (self.has_child & ((1 << pos + 1) - 1)).count_ones() as usize;
+                if r > self.look_up.len() {
+                    return Err(());
+                }
+                debug!("r: {:}", r);
+                let child_pos = self.look_up[r];
+                debug!("child_pos: {:}", child_pos);
+                match self.recursive_construct(child_pos, !is_and) {
+                    Ok(Some(p)) => {
+                        predicates.push(p);
+                    }
+                    Ok(None) => {
+                        if is_and {
+                            return  Ok(Some(Predicate::And { args: predicates }));
+                        } else {
+                            return Ok(Some(Predicate::Or { args: predicates }));
+                        }
+                    },
+                    Err(_) => return Err(()),
+                };
+                pos += 1;
+            } else {
+                predicates.push(Predicate::Leaf { idx: self.idx });
+                self.idx += 1;
+                pos += 1;
+            }
+            indicator = 1 << pos;
+        }
+        if is_and {
+            return Ok(Some(Predicate::And { args: predicates }));
+        } else {
+            return  Ok(Some(Predicate::Or { args: predicates }));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -127,7 +221,7 @@ mod test {
 
     use crate::jit::{ast::{Expr, BooleanExpr, Boolean, Predicate}, api::Assembler};
 
-    use super::{build_boolean_query, jit_short_circuit_primitive};
+    use super::{build_boolean_query, jit_short_circuit_primitive, Louds2Boolean};
 
     #[test]
     fn boolean_query_simple() {
@@ -253,5 +347,48 @@ mod test {
         debug!("end transmute");
         code_fn(batch.as_ptr(), init_v.as_ptr(), result.as_ptr(), 2);
         assert_eq!(result, vec![0x31, 0]);
+    }
+
+    #[test]
+    fn test_louds_2_boolean() {
+        tracing_subscriber::fmt().with_max_level(Level::DEBUG).init();
+        let louds = 0b0101_00000000001001_00000000000010;
+        let res = Louds2Boolean::new(louds).build();
+        let predicate = Predicate::And {
+            args: vec![
+                Predicate::Leaf { idx: 0 },
+                Predicate::Or {
+                    args: vec![
+                        Predicate::Leaf { idx: 1 },
+                        Predicate::Leaf { idx: 2 },
+                    ]
+                },
+                Predicate::Leaf { idx: 3 },
+            ]
+        };
+        assert_eq!(res.unwrap().predicate, predicate);
+    }
+
+    #[test]
+    fn test_louds_2_boolean_2() {
+        tracing_subscriber::fmt().with_max_level(Level::DEBUG).init();
+        let predicate = Predicate::And {
+            args: vec![
+                Predicate::Or {
+                    args: vec![
+                        Predicate::And { args: vec![
+                            Predicate::Leaf { idx: 0 },
+                            Predicate::Leaf { idx: 1 },
+                        ] },
+                        Predicate::Leaf { idx: 2 },
+                    ]
+                },
+                Predicate::Leaf { idx: 3 },
+                Predicate::Leaf { idx: 4 },
+            ]
+        };
+        let louds = 0b0111_00000000101001_00000000001001;
+        let res = Louds2Boolean::new(louds).build();
+        assert_eq!(predicate, res.unwrap().predicate);
     }
 }

@@ -1,7 +1,6 @@
 use std::{sync::{Arc, RwLock}, ops::Index, collections::{HashMap, BTreeMap}, cmp::max, mem::size_of_val, ptr::NonNull};
 
 use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray}, record_batch::RecordBatch, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
-use tracing::debug;
 use crate::utils::{Result, FastErr};
 
 /// The doc_id range [start, end) Batch range determines the  of relevant batch.
@@ -33,34 +32,6 @@ impl BatchRange {
         self.end - self.start
     }
 }
-
-// #[derive(Clone, Debug, PartialEq)]
-// pub struct Freqs {
-//     freqs: [Vec<u8>; 4],
-// }
-
-// impl Freqs {
-//     pub fn extract_freqs(&self, masks: &[u64; 4]) -> Vec<u8> {
-//         let cnt_0 = masks[0].count_ones() as isize;
-//         let cnt_1 = masks[1].count_ones() as isize + cnt_0;
-//         let cnt_2 = masks[2].count_ones() as isize + cnt_1;
-//         let cnt_3 = masks[3].count_ones() as usize;
-//         let valid_cnt = cnt_2 as usize + cnt_3;
-//         let mut valid_freqs = Vec::with_capacity(valid_cnt);
-//         unsafe {
-//             let freqs = _mm512_loadu_epi8(self.freqs[0].as_ptr() as *const i8);
-//             _mm512_mask_compressstoreu_epi8(valid_freqs.as_mut_ptr(), masks[0] as __mmask64, freqs);
-//             let freqs = _mm512_loadu_epi8(self.freqs[1].as_ptr() as *const i8);
-//             _mm512_mask_compressstoreu_epi8(valid_freqs.as_mut_ptr().offset(cnt_0), masks[1] as __mmask64, freqs);
-//             let freqs = _mm512_loadu_epi8(self.freqs[2].as_ptr() as *const i8);
-//             _mm512_mask_compressstoreu_epi8(valid_freqs.as_mut_ptr().offset(cnt_1), masks[2] as __mmask64, freqs);
-//             let freqs = _mm512_loadu_epi8(self.freqs[3].as_ptr() as *const i8);
-//             _mm512_mask_compressstoreu_epi8(valid_freqs.as_mut_ptr().offset(cnt_2), masks[3] as __mmask64, freqs);
-//             valid_freqs.set_len(valid_cnt);
-//         }
-//         valid_freqs
-//     }
-// }
 
 pub type PostingList = ArrayRef;
 pub type TermSchemaRef = SchemaRef;
