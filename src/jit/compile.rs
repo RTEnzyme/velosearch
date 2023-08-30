@@ -113,6 +113,14 @@ pub fn jit_short_circuit_primitive(
 
 }
 
+/// Convert the Louds encoding to JIT expr
+pub fn louds_2_boolean(node_num: usize, has_child: Vec<u8>, louds: Vec<u8>) -> Boolean {
+    // Unexpected condition:
+    // 1. the top level has only one node.
+    
+    unimplemented!()
+}
+
 #[cfg(test)]
 mod test {
     use tracing::{Level, debug};
