@@ -2,7 +2,7 @@ use std::{any::Any, ptr::NonNull, sync::Arc};
 
 use datafusion::{physical_plan::{PhysicalExpr, ColumnarValue}, arrow::{datatypes::DataType, record_batch::RecordBatch, array::{BooleanArray, ArrayData}, buffer::Buffer}, error::DataFusionError};
 
-use crate::{jit::{ast::{Predicate, Boolean}, jit_short_circuit, compile::Louds2Boolean}, JIT_MAX_NODES};
+use crate::{jit::{ast::{Predicate, Boolean}, jit_short_circuit}, JIT_MAX_NODES};
 use crate::utils::Result;
 
 use super::{boolean_eval::PhysicalPredicate, Primitives};
