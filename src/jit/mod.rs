@@ -2,10 +2,40 @@ pub mod ast;
 pub mod api;
 pub mod compile;
 pub mod jit;
+use std::collections::HashMap;
+
+use lazy_static::lazy_static;
+use tracing::{debug, info};
+
 pub use crate::jit::{api::Assembler, ast::{Expr, Boolean, BooleanExpr}, compile::build_boolean_query};
-use crate::utils::Result;
+use crate::{utils::Result, JIT_MAX_NODES, jit::compile::Louds2Boolean};
 
 use self::compile::jit_short_circuit_primitive;
+
+lazy_static!{
+    pub static ref AOT_PRIMITIVES: HashMap<u32, fn(*const *const u8, *const u8, *mut u8, i64)> = {
+        debug!("start AOT compilation");
+        let mut map = HashMap::new();
+        for n in 7..JIT_MAX_NODES {
+            for l in 1..(1 << n) {
+                let mut louds = (n as u32) << 28;
+                louds |= l << 14;
+                for c in 0..(1 << n) {
+                    let louds = louds | c;
+                    info!("louds: {:b}", louds);
+                    let mut builder = Louds2Boolean::new(louds);
+                    let boolean = builder.build();
+                    let leaf_num = builder.leaf_num();
+                    if let Some(b) = boolean {
+                        debug!("{:?}", b);
+                        map.insert(louds, jit_short_circuit(b, leaf_num).unwrap());
+                    }
+                }
+            }
+        }
+        map
+    };
+}
 
 pub fn jit_short_circuit(expr: Boolean, leaf_num: usize) -> Result<fn(*const *const u8, *const u8, *mut u8, i64)> {
     let assembler = Assembler::default();
@@ -21,7 +51,11 @@ pub fn jit_short_circuit(expr: Boolean, leaf_num: usize) -> Result<fn(*const *co
 
 #[cfg(test)]
 mod test {
-    use crate::{utils::Result, jit::{api::Assembler, ast::U16}};
+    use std::time::Instant;
+
+    use tracing::{Level, info};
+
+    use crate::{utils::Result, jit::{api::Assembler, ast::U16, AOT_PRIMITIVES}};
     use super::{jit::JIT, api::GeneratedFunction};
     
     #[test]
@@ -102,5 +136,20 @@ mod test {
         input: isize,
     ) -> Result<isize> {
         unsafe { run_code(jit, code, input) }
+    }
+
+    #[test]
+    fn test_aot_primitives() {
+        tracing_subscriber::fmt()
+        .with_max_level(Level::INFO).init();
+        let timer = Instant::now();
+        info!("len: {:}", AOT_PRIMITIVES.len());
+        info!("space: {:} bytes", std::mem::size_of_val(&AOT_PRIMITIVES));
+        info!("consume: {:}", timer.elapsed().as_secs());
+        assert!(AOT_PRIMITIVES.contains_key(&0b0111_00000000101001_00000000001001));
+        // AOT_PRIMITIVES.keys()
+        // .for_each(|v| {
+        //     println!("{:b}", v);
+        // });
     }
 }

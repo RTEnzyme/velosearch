@@ -2,7 +2,7 @@ use std::{any::Any, ptr::NonNull, sync::Arc};
 
 use datafusion::{physical_plan::{PhysicalExpr, ColumnarValue}, arrow::{datatypes::DataType, record_batch::RecordBatch, array::{BooleanArray, ArrayData}, buffer::Buffer}, error::DataFusionError};
 
-use crate::{jit::{ast::{Predicate, Boolean}, jit_short_circuit}, JIT_MAX_NODES};
+use crate::{jit::{ast::{Predicate, Boolean}, jit_short_circuit, AOT_PRIMITIVES}, JIT_MAX_NODES};
 use crate::utils::Result;
 
 use super::{boolean_eval::PhysicalPredicate, Primitives};
@@ -45,7 +45,12 @@ impl ShortCircuit {
             let mut builder = LoudsBuilder::new(node_num);
             predicate_2_louds(cnf, &mut builder);
             let louds = builder.build();
-            unimplemented!()
+            let primitive = AOT_PRIMITIVES[&louds];
+            let batch_idx = convert_predicate(&cnf).1;
+            return Self {
+                primitive,
+                batch_idx
+            };
         }
         let (predicate, batch_idx) = convert_predicate(&cnf);
         Self::try_new(batch_idx, predicate, node_num + 1, leaf_num, 0).unwrap()

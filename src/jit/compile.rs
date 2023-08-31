@@ -150,6 +150,10 @@ impl Louds2Boolean {
         }
     }
 
+    pub fn leaf_num(&self) -> usize {
+        self.idx
+    }
+
     pub fn build(&mut self) -> Option<Boolean> {
         match self.recursive_construct(0, true) {
             Ok(p) => match p {
@@ -180,7 +184,7 @@ impl Louds2Boolean {
                 // r = rank(S-HasChild, pos) + 1;
                 // select(louds, r);
                 let r = (self.has_child & ((1 << pos + 1) - 1)).count_ones() as usize;
-                if r > self.look_up.len() {
+                if r >= self.look_up.len() {
                     return Err(());
                 }
                 debug!("r: {:}", r);
