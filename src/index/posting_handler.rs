@@ -8,7 +8,7 @@ use tantivy::tokenizer::{TextAnalyzer, SimpleTokenizer, RemoveLongFilter, LowerC
 use tokio::time::Instant;
 use tracing::{info, span, Level, debug};
 
-use crate::{utils::json::{parse_wiki_dir, WikiItem}, Result, batch::{PostingBatchBuilder, BatchRange, TermMetaBuilder}, datasources::posting_table::PostingTable, BooleanContext, query::boolean_query::BooleanPredicateBuilder};
+use crate::{utils::json::{parse_wiki_dir, WikiItem}, Result, batch::{PostingBatchBuilder, BatchRange, TermMetaBuilder}, datasources::posting_table::PostingTable, BooleanContext, query::boolean_query::BooleanPredicateBuilder, jit::AOT_PRIMITIVES};
 
 use super::HandlerT;
 
@@ -83,7 +83,7 @@ impl HandlerT for PostingHandler {
         ctx.register_index(TableReference::Bare { table: "__table__".into() }, Arc::new(self.posting_table.take().unwrap()))?;
         let table = ctx.index("__table__").await?;
         let mut test_iter = self.test_case.clone().into_iter();
-
+        let _ = AOT_PRIMITIVES.len();
         // let mut handlers = Vec::with_capacity(20);
         debug!("======================start!===========================");
         let mut cnt = 0;

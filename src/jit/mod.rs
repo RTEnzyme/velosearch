@@ -16,7 +16,7 @@ lazy_static!{
     pub static ref AOT_PRIMITIVES: HashMap<u32, fn(*const *const u8, *const u8, *mut u8, i64)> = {
         debug!("start AOT compilation");
         let mut map = HashMap::new();
-        for n in 7..JIT_MAX_NODES {
+        for n in 2..JIT_MAX_NODES {
             for l in 1..(1 << n) {
                 let mut louds = (n as u32) << 28;
                 louds |= l << 14;
