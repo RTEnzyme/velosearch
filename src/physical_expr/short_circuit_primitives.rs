@@ -2,7 +2,7 @@ use std::{any::Any, ptr::NonNull, sync::Arc};
 
 use datafusion::{physical_plan::{PhysicalExpr, ColumnarValue}, arrow::{datatypes::DataType, record_batch::RecordBatch, array::{BooleanArray, ArrayData}, buffer::Buffer}, error::DataFusionError};
 
-use crate::{jit::{ast::{Predicate, Boolean}, jit_short_circuit}, JIT_MAX_NODES};
+use crate::{jit::{ast::{Predicate, Boolean}, jit_short_circuit, compile::Louds2Boolean}, JIT_MAX_NODES};
 use crate::utils::Result;
 
 use super::{boolean_eval::PhysicalPredicate, Primitives};
@@ -43,7 +43,7 @@ impl ShortCircuit {
     ) -> Self {
         if node_num <= JIT_MAX_NODES {
             let mut builder = LoudsBuilder::new(node_num);
-            predicate_2_louds(cnf[0], &mut builder);
+            predicate_2_louds(cnf, &mut builder);
             let louds = builder.build();
             unimplemented!()
         }
@@ -203,11 +203,15 @@ impl LoudsBuilder {
     }
 
     fn set_haschild(&mut self, has_child: bool) {
-        self.has_child |= 1 << self.pos;
+        if has_child {
+            self.has_child |= 1 << self.pos;
+        }
     }
 
     fn set_louds(&mut self, louds: bool) {
-        self.louds |= 1 << self.pos;
+        if louds {
+            self.louds |= 1 << self.pos;
+        }
     }
 
     fn next(&mut self) {
@@ -222,34 +226,65 @@ impl LoudsBuilder {
     }
 }
 
-fn predicate_2_louds(predicate: &PhysicalPredicate, builder: &mut LoudsBuilder) {
+fn predicate_2_louds(cnf: &Vec<&PhysicalPredicate>, builder: &mut LoudsBuilder) {
+    builder.set_louds(true);
+    if let PhysicalPredicate::Leaf { .. } = cnf[0] {
+        builder.set_haschild(false);
+    } else {
+        builder.set_haschild(true);
+    }
+        builder.next();
+    for formula in &cnf[1..] {
+        builder.set_louds(false);
+        if let PhysicalPredicate::Leaf { .. } = formula {
+            builder.set_haschild(false);
+        } else {
+            builder.set_haschild(true);
+        }
+        builder.next();
+    }
+    for formula in cnf {
+        recursive_predicate_2_louds(formula, builder);
+    }
+}
+
+fn recursive_predicate_2_louds(predicate: &PhysicalPredicate, builder: &mut LoudsBuilder) {
     match predicate {
         PhysicalPredicate::And { args } => {
-            // This node is `AND` node, so it has children.
-            builder.set_haschild(true);
             // The LOUDS of first child node is Set bit.
-            builder.next();
             builder.set_louds(true);
+            builder.next();
             for child in &args[1..] {
-                builder.next();
                 builder.set_louds(false);
-                predicate_2_louds(&child.sub_predicate, builder);
+                if let PhysicalPredicate::Leaf { .. } = child.sub_predicate {
+                    builder.set_haschild(false);
+                } else {
+                    builder.set_haschild(true);
+                }
+                builder.next();
+            }
+            for child in args {
+                recursive_predicate_2_louds(&child.sub_predicate, builder);
             }
         }
         PhysicalPredicate::Or { args } => {
-            // This node is `OR` node, so it has children.
-            builder.set_haschild(true);
             // The LOUDS of first child node is Set.
-            builder.next();
             builder.set_louds(true);
+            builder.next();
             for child in &args[1..] {
-                builder.next();
                 builder.set_louds(false);
-                predicate_2_louds(&child.sub_predicate, builder);
+                if let PhysicalPredicate::Leaf { .. } = child.sub_predicate {
+                    builder.set_haschild(false);
+                } else {
+                    builder.set_haschild(true);
+                }
+                builder.next();
+            }
+            for child in args {
+                recursive_predicate_2_louds(&child.sub_predicate, builder);
             }
         }
         PhysicalPredicate::Leaf { .. } => {
-            builder.set_haschild(false);
         }
     }
 }
@@ -258,9 +293,11 @@ fn predicate_2_louds(predicate: &PhysicalPredicate, builder: &mut LoudsBuilder) 
 mod tests {
     use std::{sync::Arc, ptr::NonNull};
 
-    use datafusion::{physical_plan::PhysicalExpr, arrow::{datatypes::{Schema, Field, DataType}, record_batch::RecordBatch, array::{BooleanArray, ArrayData}, buffer::Buffer}};
+    use datafusion::{physical_plan::{PhysicalExpr, expressions::Column}, arrow::{datatypes::{Schema, Field, DataType}, record_batch::RecordBatch, array::{BooleanArray, ArrayData}, buffer::Buffer}};
 
-    use crate::{jit::ast::Predicate, ShortCircuit};
+    use crate::{jit::ast::Predicate, ShortCircuit, physical_expr::{boolean_eval::{PhysicalPredicate, SubPredicate}, Primitives}};
+
+    use super::{predicate_2_louds, LoudsBuilder};
 
     #[test]
     fn test_short_circuit() {
@@ -319,5 +356,31 @@ mod tests {
             .add_buffer(value_buffer);
         let array_data = builder.build().unwrap();
         BooleanArray::from(array_data)
+    }
+
+    #[test]
+    fn physical_2_predicate() {
+        let predicate = vec![
+            PhysicalPredicate::Leaf {
+                primitive: Primitives::ColumnPrimitive(Column::new("test1", 0)),
+            },
+            PhysicalPredicate::Or{
+                args: vec![
+                    SubPredicate::new_with_predicate(PhysicalPredicate::Leaf {
+                        primitive: Primitives::ColumnPrimitive(Column::new("test2", 1)),
+                    }),
+                    SubPredicate::new_with_predicate(PhysicalPredicate::Leaf {
+                        primitive: Primitives::ColumnPrimitive(Column::new("test3", 2)),
+                    }),
+                ]
+            },
+            PhysicalPredicate::Leaf {
+                primitive: Primitives::ColumnPrimitive(Column::new("test4", 3)),
+            }
+        ];
+        let mut builder = LoudsBuilder::new(5);
+        predicate_2_louds(&predicate.iter().collect(), &mut builder);
+        let res = builder.build();
+        println!("res: {:b}", res);
     }
 }
