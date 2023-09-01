@@ -76,7 +76,7 @@ impl HandlerT for PostingHandler {
     }
 
     async fn execute(&mut self) ->  Result<u128> {
-
+        rayon::ThreadPoolBuilder::new().num_threads(22).build_global().unwrap();
         let partition_nums = self.partition_nums;
         let ctx = BooleanContext::new();
         let space = self.posting_table.as_ref().unwrap().space_usage();
@@ -101,16 +101,18 @@ impl HandlerT for PostingHandler {
             // handlers.push(tokio::spawn(async move {
                 debug!("start construct query");
             let mut time_distri = Vec::new();
-            let round = 5;
+            let round = 1;
             for i in 0..round {
                 let idx = i * 5;
-                let predicate = BooleanPredicateBuilder::should(&[&keys[idx], &keys[idx + 1]]).unwrap();
-                let predicate1 = BooleanPredicateBuilder::must(&[&keys[idx + 2], &keys[idx + 3], &keys[idx + 4]]).unwrap();
+                // let predicate = BooleanPredicateBuilder::should(&[&keys[idx], &keys[idx + 1]]).unwrap();
+                // let predicate1 = BooleanPredicateBuilder::must(&[&keys[idx + 2], &keys[idx + 3], &keys[idx + 4]]).unwrap();
+                let predicate = BooleanPredicateBuilder::should(&["hello", "the"]).unwrap();
+                let predicate1 = BooleanPredicateBuilder::must(&["it", "must", "to"]).unwrap();
                 // let predicate = BooleanPredicateBuilder::should(&["and", "the"]).unwrap();
                 let predicate = predicate.with_must(predicate1).unwrap();
                 let predicate = predicate.build();
                 info!("Predicate{:}: {:?}", i, predicate);
-                let index = ctx.boolean("__table__", predicate, true).await.unwrap();
+                let index = ctx.boolean("__table__", predicate, false).await.unwrap();
                 let timer = Instant::now();
                     index
                     // .explain(false, true).unwrap()
@@ -180,7 +182,7 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
                 thredhold += batch_size;
             }
             partition_batch[current.0][current.1].push_term(word, id).expect("Shoud push term correctly");
-            entry.set_true(current.1, current.0);
+            entry.set_true(current.1, current.0, id);
         });
     for (i, p) in partition_batch.iter().enumerate() {
         for (j, pp) in p.into_iter().enumerate() {

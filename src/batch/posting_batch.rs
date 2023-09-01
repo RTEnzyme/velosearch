@@ -1,6 +1,7 @@
 use std::{sync::{Arc, RwLock}, ops::Index, collections::{HashMap, BTreeMap}, cmp::max, mem::size_of_val, ptr::NonNull};
 
 use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray}, record_batch::RecordBatch, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
+use tracing::debug;
 use crate::utils::{Result, FastErr};
 
 /// The doc_id range [start, end) Batch range determines the  of relevant batch.
@@ -163,6 +164,7 @@ impl PostingBatch {
     }
 
     pub fn project_fold_with_freqs(&self, indices: &[Option<usize>], projected_schema: SchemaRef) -> Result<RecordBatch> {
+        debug!("project_fold_with_freqs");
         // Add freqs fields
         let mut fields = projected_schema.fields().clone();
         let mut freqs = fields
@@ -426,6 +428,7 @@ pub struct TermMetaBuilder {
     nums: Vec<u32>,
     idx: Vec<Vec<Option<u16>>>,
     partition_num: usize,
+    bounder: Option<u32>,
 }
 
 impl TermMetaBuilder {
@@ -435,14 +438,18 @@ impl TermMetaBuilder {
             nums: vec![0; partition_num],
             idx: vec![vec![None; batch_num]; partition_num],
             partition_num,
+            bounder: None,
         }
     }
 
-    pub fn set_true(&mut self, i: usize, partition_num: usize) {
+    pub fn set_true(&mut self, i: usize, partition_num: usize, id: u32) {
+        if self.bounder.is_none() || id > self.bounder.unwrap() {
+            self.nums[partition_num] += 1;
+            self.bounder = Some(id);
+        }
         if self.distribution[partition_num][i] {
             return;
         }
-        self.nums[partition_num] += 1;
         self.distribution[partition_num][i] = true;
     }
 

@@ -1,4 +1,4 @@
-use std::{any::Any, sync::Arc, task::Poll, mem::size_of_val};
+use std::{any::Any, sync::Arc, task::Poll, mem::size_of_val, time::Instant};
 
 use async_trait::async_trait;
 use datafusion::{
@@ -9,6 +9,7 @@ use datafusion::{
 use futures::{Stream, future::BoxFuture};
 use adaptive_hybrid_trie::TermIdx;
 use tracing::debug;
+use rayon::prelude::*;
 
 use crate::batch::{PostingBatch, BatchRange, PostingBatchBuilder};
 
@@ -291,16 +292,19 @@ impl PostingStream {
                 }
             }
             if is_score {
-                debug!("project fold with freqs");
-                data.as_ref().into_iter()
+                let time = Instant::now();
+                let res = data.as_ref().into_iter()
                     .zip(project_idx.into_iter())
                     .zip(min_range.into_iter())
+                    .par_bridge()
                     .filter(|(_, v)| v.unwrap())
                     .map(|((d, p), _)| {
                         d.project_fold_with_freqs(&p, schema_async.clone()).map_err(|e| DataFusionError
                         ::Execution(e.to_string()))
                     })
-                    .collect::<Result<Vec<RecordBatch>>>().unwrap()
+                    .collect::<Result<Vec<RecordBatch>>>().unwrap();
+                debug!("project_fold_with_freqs consuming: {:} us", time.elapsed().as_micros());
+                res
             } else {
                 // project_fold传入&[Option<usize>]和projected_schema
                 data.as_ref().into_iter()

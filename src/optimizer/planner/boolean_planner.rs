@@ -141,6 +141,7 @@ impl BooleanPhysicalPlanner {
                             .filter(|(_, s)| *s != "__id__")
                             .map(|(i, s)| {
                                 let term_meta = posting.term_meta_of(s);
+                                debug!("{s} term_meta: term_meta: {term_meta:?}");
                                 let sel = term_meta.as_ref().map(|v| v.selectivity).unwrap_or(1.);
                                 ((s, i), (term_meta, (s, sel)))
                             })

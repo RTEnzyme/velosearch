@@ -70,33 +70,42 @@ impl HandlerT for TantivyHandler {
     async fn execute(&mut self) -> Result<u128> {
         let reader = self.index.reader()?;
         let term_query_3: Box<dyn Query> = Box::new(TermQuery::new(
-            Term::from_field_text(self.field, self.test_case[1].as_str()),
-            IndexRecordOption::Basic,
+            Term::from_field_text(self.field, "must"),
+            IndexRecordOption::WithFreqs,
         ));
         let term_query_4: Box<dyn Query> = Box::new(TermQuery::new(
-            Term::from_field_text(self.field, self.test_case[3].as_str()),
-            IndexRecordOption::Basic,
+            Term::from_field_text(self.field, "to"),
+            IndexRecordOption::WithFreqs,
         ));
         let term_query_5: Box<dyn Query> = Box::new(TermQuery::new(
-            Term::from_field_text(self.field, self.test_case[0].as_str()),
-            IndexRecordOption::Basic,
+            Term::from_field_text(self.field, "it"),
+            IndexRecordOption::WithFreqs,
         ));
-        let or_query_1: Box<dyn Query> = Box::new(PhraseQuery::new(vec![
-            Term::from_field_text(self.field, self.test_case[2].as_str()),
-            Term::from_field_text(self.field, self.test_case[4].as_str()),
+        let or_query_1: Box<dyn Query> = Box::new(TermQuery::new(
+            Term::from_field_text(self.field, "hello"),
+            IndexRecordOption::WithFreqs,
+        ));
+        let or_query_2 = Box::new(TermQuery::new(
+            Term::from_field_text(self.field, "the"),
+            IndexRecordOption::WithFreqs,
+        ));
+        let or_query = Box::new(BooleanQuery::new(vec![
+            (Occur::Should, or_query_1),
+            (Occur::Should, or_query_2),
         ]));
-        let boolean_query = BooleanQuery::new(vec![
-            (Occur::Must, or_query_1),
+        let boolean_query: BooleanQuery = BooleanQuery::new(vec![
+            (Occur::Should, or_query),
             (Occur::Must, term_query_3),
-            // (Occur::Must, term_query_4),
-            // (Occur::Must, term_query_5),
+            (Occur::Must, term_query_4),
+            (Occur::Must, term_query_5),
         ]);
         let timer = Instant::now();
         let mut space = 0;
         for _ in 0..1 {
             let searcher = reader.searcher();
-            let _ = searcher.search(&boolean_query, &DocSetCollector)?;
+            let res = searcher.search(&boolean_query, &DocSetCollector)?;
             space += searcher.space_usage().unwrap().total();
+            info!("{:?}", res.len());
         }
         let query_time  = timer.elapsed().as_micros() / 1;
         info!("Tantivy took {} us", timer.elapsed().as_micros() / 1);
