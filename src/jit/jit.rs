@@ -79,7 +79,7 @@ impl JIT {
         flag_builder.set("is_pic", "false").unwrap();
 
         flag_builder.set("opt_level", "speed").unwrap();
-        flag_builder.set("enable_simd", "false").unwrap();
+        flag_builder.set("enable_simd", "true").unwrap();
         // flag_builder.set("enable_simd", "true").unwrap();
         let isa_builder = cranelift_native::builder().unwrap_or_else(|msg| {
             panic!("host machine is not supported: {msg}");

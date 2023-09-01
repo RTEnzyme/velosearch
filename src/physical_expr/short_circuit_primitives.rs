@@ -1,7 +1,7 @@
 use std::{any::Any, ptr::NonNull, sync::Arc};
 
 use datafusion::{physical_plan::{PhysicalExpr, ColumnarValue}, arrow::{datatypes::DataType, record_batch::RecordBatch, array::{BooleanArray, ArrayData}, buffer::Buffer}, error::DataFusionError};
-use tracing::info;
+use tracing::{info, debug};
 
 use crate::{jit::{ast::{Predicate, Boolean}, jit_short_circuit, AOT_PRIMITIVES}, JIT_MAX_NODES};
 use crate::utils::Result;
@@ -46,7 +46,8 @@ impl ShortCircuit {
             let mut builder = LoudsBuilder::new(node_num);
             predicate_2_louds(cnf, &mut builder);
             let louds = builder.build();
-            info!("louds: {:?}", louds);
+            debug!("node_num: {:}", node_num);
+            debug!("louds: {:b}", louds);
             let primitive = AOT_PRIMITIVES[&louds];
             let batch_idx = convert_predicate(&cnf).1;
             return Self {

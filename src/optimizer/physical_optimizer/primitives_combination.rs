@@ -57,7 +57,7 @@ fn optimize_predicate_inner(predicate: &mut PhysicalPredicate) {
             // The first level is `AND`.
             let mut node_num = 0;
             let mut leaf_num = 0;
-            let mut cum_instructions = 0;
+            let mut cum_instructions: f64 = 0.;
             let mut cnf = Vec::new();
             let mut idx = args.len() - 1;
             let mut optimized_args = Vec::new();
@@ -77,13 +77,16 @@ fn optimize_predicate_inner(predicate: &mut PhysicalPredicate) {
                     cnf.clear();
                     node_num = 0;
                     leaf_num = 0;
-                    cum_instructions = 0;
+                    cum_instructions = 0.;
                     idx -= 1;
                     continue;
                 }
-                cum_instructions += node.leaf_num - 1;
+                cum_instructions += node.cs * node.leaf_num as f64 ;
                 // If cpo > threshold, end this optimization stage
-                if (cum_instructions as f64 + node.cs) / (leaf_num as f64 - 1.) > 0.5 {
+                if (cum_instructions + node.cs) / (leaf_num as f64 - 1. + node.leaf_num as f64) > 0.5 {
+                    if node_num < 2 {
+                        break;
+                    }
                     idx -= 1;
                     let primitive = Primitives::ShortCircuitPrimitive(ShortCircuit::new(&cnf, node_num, leaf_num));
                     optimized_args.push(SubPredicate::new_with_predicate(PhysicalPredicate::Leaf { primitive }));

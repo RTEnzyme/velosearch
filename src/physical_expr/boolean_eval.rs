@@ -180,7 +180,7 @@ impl BooleanEvalExpr {
 
 impl std::fmt::Display for BooleanEvalExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.predicate)
+        write!(f, "{:?}", unsafe{ &*(self.predicate.as_ref().get()) as &PhysicalPredicate })
     }
 }
 
