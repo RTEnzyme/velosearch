@@ -1,7 +1,7 @@
 use std::{any::Any, ptr::NonNull, sync::Arc};
 
 use datafusion::{physical_plan::{PhysicalExpr, ColumnarValue}, arrow::{datatypes::DataType, record_batch::RecordBatch, array::{BooleanArray, ArrayData}, buffer::Buffer}, error::DataFusionError};
-use tracing::{info, debug};
+use tracing::debug;
 
 use crate::{jit::{ast::{Predicate, Boolean}, jit_short_circuit, AOT_PRIMITIVES}, JIT_MAX_NODES};
 use crate::utils::Result;

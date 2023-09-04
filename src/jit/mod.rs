@@ -2,38 +2,81 @@ pub mod ast;
 pub mod api;
 pub mod compile;
 pub mod jit;
-use std::collections::HashMap;
+use std::{collections::HashMap, fs::File};
 
 use lazy_static::lazy_static;
-use tracing::debug;
+use tracing::{debug, info};
 
 pub use crate::jit::{api::Assembler, ast::{Expr, Boolean, BooleanExpr}, compile::build_boolean_query};
 use crate::{utils::Result, JIT_MAX_NODES, jit::compile::Louds2Boolean};
 
 use self::compile::jit_short_circuit_primitive;
 
+
 lazy_static!{
     pub static ref AOT_PRIMITIVES: HashMap<u32, fn(*const *const u8, *const u8, *mut u8, i64)> = {
-        debug!("start AOT compilation");
-        let mut map = HashMap::new();
-        for n in 2..JIT_MAX_NODES {
-            for l in 1..(1 << n) {
-                let mut louds = (n as u32) << 28;
-                louds |= l << 14;
-                for c in 0..(1 << n) {
-                    let louds = louds | c;
-                    let mut builder = Louds2Boolean::new(louds);
-                    let boolean = builder.build();
-                    let leaf_num = builder.leaf_num();
-                    if let Some(b) = boolean {
-                        debug!("louds: {:b}", louds);
-                        map.insert(louds, jit_short_circuit(b, leaf_num).unwrap());
+        if let Ok(f) = File::open("aot.bin") {
+            info!("Loud AOT functions from `aot.bin`");
+            let reader = std::io::BufReader::new(f);
+            let aot_map: HashMap<u32, Vec<u8>> = bincode::deserialize_from(reader).unwrap();
+            aot_map.into_iter()
+            .map(|(k, v)| {
+                let func = {
+                    let ptr = v.as_ptr();
+                    let code_fn = unsafe {
+                        core::mem::transmute::<_, fn(*const *const u8, *const u8, *mut u8, i64)->()>(ptr)
+                    };
+                    std::mem::forget(v);
+                    code_fn
+                };
+                (k, func)
+            })
+            .collect()
+        } else {
+            info!("start AOT compilation");
+            let mut map = HashMap::new();
+            for n in 2..JIT_MAX_NODES {
+                for l in 1..(1 << n) {
+                    let mut louds = (n as u32) << 28;
+                    louds |= l << 14;
+                    for c in 0..(1 << n) {
+                        let louds = louds | c;
+                        let mut builder = Louds2Boolean::new(louds);
+                        let boolean = builder.build();
+                        let leaf_num = builder.leaf_num();
+                        if let Some(b) = boolean {
+                            debug!("louds: {:b}", louds);
+                            map.insert(louds, aot_short_circuit(b, leaf_num).unwrap());
+                        }
                     }
                 }
             }
+            let file = File::create("aot.bin").expect("Unable to create file.");
+            let writer = std::io::BufWriter::new(file);
+            bincode::serialize_into(writer, &map).expect("Unable to serialize data");
+            map.into_iter()
+            .map(|(k, v)| {
+                let func = {
+                    let ptr = v.as_ptr();
+                    let code_fn = unsafe {
+                        core::mem::transmute::<_, fn(*const *const u8, *const u8, *mut u8, i64)->()>(ptr)
+                    };
+                    std::mem::forget(v);
+                    code_fn
+                };
+                (k, func)
+            })
+            .collect()
         }
-        map
     };
+}
+
+pub fn aot_short_circuit(expr: Boolean, leaf_num: usize) -> Result<Vec<u8>> {
+    let assembler = Assembler::default();
+    let gen_func = jit_short_circuit_primitive(&assembler, expr, leaf_num)?;
+
+    let mut jit = assembler.create_jit();
+    jit.compile_to_bytes(gen_func)
 }
 
 pub fn jit_short_circuit(expr: Boolean, leaf_num: usize) -> Result<fn(*const *const u8, *const u8, *mut u8, i64)> {

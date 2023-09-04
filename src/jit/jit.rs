@@ -146,6 +146,54 @@ impl JIT {
         Ok(code)
     }
 
+    /// Compile the generated function into machine code.
+    pub fn compile_to_bytes(&mut self, func: GeneratedFunction) -> Result<Vec<u8>> {
+        let GeneratedFunction {
+            name,
+            params,
+            body,
+            ret,
+        } = func;
+
+        // Translate the AST nodes into Cranelift IR.
+        self.translate(params, ret, body)?;
+
+        // Next, declare the function to jit. Functions must be declared
+        // before they can be called, or defined.
+        let id = self
+            .module
+            .declare_function(&name, Linkage::Export, &self.ctx.func.signature)
+            .map_err(|e| {
+                FastErr::InternalErr(format!(
+                    "failed in declare the function to jit: {e:?}"
+                ))
+            })?;
+
+        // Define the function to jit. This finishes compilation, although
+        // there may be outstanding relocations to perform. Currently, jit
+        // cannot finish relocations until all functions to be called are
+        // defined. For now, we'll just finalize the function below.
+        self.module
+            .define_function(id, &mut self.ctx)
+            .map_err(|e| {
+                FastErr::InternalErr(format!(
+                    "failed in define the function to jit: {e:?}"
+                ))
+            })?;
+
+        // Now that compilation is finished, we can clear out the context state.
+        self.module.clear_context(&mut self.ctx);
+
+        // Finalize the functions which we just defined, which resolves any
+        // outstanding relocations (patching in addresses, now that they're
+        // available).
+        self.module.finalize_definitions().unwrap();
+        // We can now retrieve a pointer to the machine code.
+        let code = self.module.get_finalized_function_bytes(id);
+
+        Ok(code)
+    }
+
     // Translate into Cranelift IR.
     fn translate(
         &mut self,
