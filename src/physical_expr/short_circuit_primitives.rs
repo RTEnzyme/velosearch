@@ -46,8 +46,7 @@ impl ShortCircuit {
             let mut builder = LoudsBuilder::new(node_num);
             predicate_2_louds(cnf, &mut builder);
             let louds = builder.build();
-            debug!("node_num: {:}", node_num);
-            debug!("louds: {:b}", louds);
+            debug!("louds: {:?}", louds);
             let primitive = AOT_PRIMITIVES[&louds];
             let batch_idx = convert_predicate(&cnf).1;
             return Self {

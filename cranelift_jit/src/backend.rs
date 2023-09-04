@@ -411,6 +411,26 @@ impl JITModule {
             .ptr
     }
 
+    /// Returns the content of a finalized function,
+    /// 
+    /// The pointer remains valid until either [`JITModule::free_memory`] is called or in the future
+    /// some way of deallocating this individual function is used.
+    pub fn get_finalized_function_bytes(&self, func_id: FuncId) -> Vec<u8> {
+        let info = &self.compiled_functions[func_id];
+        assert!(
+            !self.functions_to_finalize.iter().any(|x| *x == func_id),
+            "function not yet finalized",
+        );
+        let blob = info.as_ref().expect("function not yet finalized");
+        unsafe { 
+            Vec::from_raw_parts(
+                blob.ptr,
+                blob.size,
+                blob.size,
+            )
+        }
+    }
+
     /// Returns the address and size of a finalized data object.
     ///
     /// The pointer remains valid until either [`JITModule::free_memory`] is called or in the future
