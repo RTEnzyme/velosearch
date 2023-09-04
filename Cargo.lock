@@ -158,9 +158,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.71"
+version = "1.0.75"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c7d0618f0e0b7e8ff11427422b64564d5fb0be1940354bfe2e0529b18a9d9b8"
+checksum = "a4668cab20f66d8d020e1fbc0ebe47217433c1b6c8f2040faf858554e394ace6"
 
 [[package]]
 name = "arbitrary"
@@ -735,8 +735,6 @@ dependencies = [
 [[package]]
 name = "cranelift"
 version = "0.97.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a63a0bfb039e58f7a265f8a8da9d3c19de63ffaf867d0591b9f1ad92d5b58e50"
 dependencies = [
  "cranelift-codegen",
  "cranelift-frontend",
@@ -768,6 +766,7 @@ dependencies = [
  "hashbrown 0.13.2",
  "log",
  "regalloc2",
+ "serde",
  "smallvec",
  "target-lexicon",
 ]
@@ -801,6 +800,9 @@ name = "cranelift-entity"
 version = "0.97.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6565198b5684367371e2b946ceca721eb36965e75e3592fad12fc2e15f65d7b"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "cranelift-frontend"
@@ -809,6 +811,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25f28cc44847c8b98cb921e6bfc0f7b228f4d27519376fea724d181da91709a6"
 dependencies = [
  "cranelift-codegen",
+ "hashbrown 0.13.2",
  "log",
  "smallvec",
  "target-lexicon",
@@ -823,17 +826,18 @@ checksum = "80b658177e72178c438f7de5d6645c56d97af38e17fcb0b500459007b4e05cc5"
 [[package]]
 name = "cranelift-jit"
 version = "0.97.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a7492d08dce8b3f1c5a7188483744fd23c84f41751532c03761d70ec13dd45c"
 dependencies = [
  "anyhow",
+ "cranelift",
  "cranelift-codegen",
  "cranelift-control",
  "cranelift-entity",
+ "cranelift-frontend",
  "cranelift-module",
  "cranelift-native",
  "libc",
  "log",
+ "memmap2 0.2.3",
  "region",
  "target-lexicon",
  "wasmtime-jit-icache-coherence",
@@ -843,19 +847,17 @@ dependencies = [
 [[package]]
 name = "cranelift-module"
 version = "0.97.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a80712621a8400fd288149015b8f0897e3738ba0b6cca48010421a873892b64"
 dependencies = [
  "anyhow",
  "cranelift-codegen",
  "cranelift-control",
+ "hashbrown 0.13.2",
+ "serde",
 ]
 
 [[package]]
 name = "cranelift-native"
 version = "0.97.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf1c7de7221e6afcc5e13ced3b218faab3bc65b47eac67400046a05418aecd6a"
 dependencies = [
  "cranelift-codegen",
  "libc",
@@ -1873,6 +1875,15 @@ checksum = "2dffe52ecf27772e601905b7522cb4ef790d2cc203488bbd0e2fe85fcb74566d"
 
 [[package]]
 name = "memmap2"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "723e3ebdcdc5c023db1df315364573789f8857c11b631a2fdfad7c00f5c046b4"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "memmap2"
 version = "0.5.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "83faa42c0a078c393f6b29d5db232d8be22776a891f8f56e5284faee4a20b327"
@@ -2314,13 +2325,14 @@ dependencies = [
 
 [[package]]
 name = "regalloc2"
-version = "0.9.1"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12513beb38dd35aab3ac5f5b89fd0330159a0dc21d5309d75073011bbc8032b0"
+checksum = "5b4dcbd3a2ae7fb94b5813fa0e957c6ab51bf5d0a8ee1b69e0c2d0f1e6eb8485"
 dependencies = [
  "hashbrown 0.13.2",
  "log",
  "rustc-hash",
+ "serde",
  "slice-group-by",
  "smallvec",
 ]
@@ -2530,6 +2542,9 @@ name = "smallvec"
 version = "1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a507befe795404456341dfab10cef66ead4c041f62b8b11bbb92bffe5d0953e0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "snafu"
@@ -2700,7 +2715,7 @@ dependencies = [
  "lru",
  "lz4_flex",
  "measure_time",
- "memmap2",
+ "memmap2 0.5.10",
  "murmurhash32",
  "num_cpus",
  "once_cell",
@@ -2765,9 +2780,9 @@ dependencies = [
 
 [[package]]
 name = "target-lexicon"
-version = "0.12.8"
+version = "0.12.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b1c7f239eb94671427157bd93b3694320f3668d4e1eff08c7285366fd777fac"
+checksum = "9d0e916b1148c8e263850e1ebcbd046f333e0683c724876bb0da63ea4373dc8a"
 
 [[package]]
 name = "tempfile"

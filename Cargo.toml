@@ -5,7 +5,7 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [workspace]
-members = ["adaptive_hybrid_trie"]
+members = ["adaptive_hybrid_trie", "cranelift", "cranelift_jit", "cranelift_module", "cranelift_native"]
 
 [features]
 default = ["trie_idx"]
@@ -31,13 +31,13 @@ chrono = "0.4"
 parking_lot = "0.12"
 packed_simd_2 = "0.3.8"
 adaptive_hybrid_trie = {path="adaptive_hybrid_trie"}
+cranelift = {path = "cranelift" }
+cranelift-jit = { path = "./cranelift_jit" }
+cranelift-module = { path = "./cranelift_module" }
+cranelift-native = { path = "./cranelift_native" }
 tantivy = "0.19"
 criterion = {version = "0.5", features = ["html_reports"]}
 sorted-iter = "0.1.11"
-cranelift = "0.97"
-cranelift-jit = "0.97"
-cranelift-module = "0.97"
-cranelift-native = "0.97"
 lazy_static = "1.4"
 
 
