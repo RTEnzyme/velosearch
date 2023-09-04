@@ -5,7 +5,7 @@ pub mod jit;
 use std::collections::HashMap;
 
 use lazy_static::lazy_static;
-use tracing::{debug, info};
+use tracing::debug;
 
 pub use crate::jit::{api::Assembler, ast::{Expr, Boolean, BooleanExpr}, compile::build_boolean_query};
 use crate::{utils::Result, JIT_MAX_NODES, jit::compile::Louds2Boolean};
@@ -22,12 +22,11 @@ lazy_static!{
                 louds |= l << 14;
                 for c in 0..(1 << n) {
                     let louds = louds | c;
-                    info!("louds: {:b}", louds);
                     let mut builder = Louds2Boolean::new(louds);
                     let boolean = builder.build();
                     let leaf_num = builder.leaf_num();
                     if let Some(b) = boolean {
-                        debug!("{:?}", b);
+                        debug!("louds: {:b}", louds);
                         map.insert(louds, jit_short_circuit(b, leaf_num).unwrap());
                     }
                 }
