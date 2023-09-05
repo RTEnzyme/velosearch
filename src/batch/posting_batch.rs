@@ -1,6 +1,7 @@
-use std::{sync::{Arc, RwLock}, ops::Index, collections::{HashMap, BTreeMap}, cmp::max, mem::size_of_val, ptr::NonNull};
+use std::{sync::{Arc, RwLock}, ops::Index, collections::{HashMap, BTreeMap}, cmp::max, mem::size_of_val, ptr::NonNull, cell::RefCell};
 
 use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray}, record_batch::RecordBatch, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
+use serde::{Serialize, Deserialize, ser::SerializeStruct, Deserializer};
 use tracing::debug;
 use crate::utils::{Result, FastErr};
 
@@ -272,10 +273,11 @@ impl Index<&str> for PostingBatch {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct PostingBatchBuilder {
     start: u32,
     current: u32,
-    term_dict: RwLock<HashMap<String, Vec<(u16, u8)>>>,
+    term_dict: RefCell<HashMap<String, Vec<(u16, u8)>>>,
     term_num: usize,
 }
 
@@ -284,7 +286,7 @@ impl PostingBatchBuilder {
         Self { 
             start,
             current: start,
-            term_dict: RwLock::new(HashMap::new()),
+            term_dict: RefCell::new(HashMap::new()),
             term_num: 0,
         }
     }
@@ -297,7 +299,6 @@ impl PostingBatchBuilder {
         let off = (doc_id - self.start) as u16;
         let entry = self.term_dict
             .get_mut()
-            .map_err(|_| FastErr::InternalErr("Can't acquire the RwLock correctly".to_string()))?
             .entry(term)
             .or_insert(vec![(off, 0)]);
         if entry.last().unwrap().0 ==  off {
@@ -314,7 +315,6 @@ impl PostingBatchBuilder {
         let current = max(self.current, doc_ids[doc_ids.len() - 1].0);
         self.term_dict
             .get_mut()
-            .map_err(|_| FastErr::InternalErr(format!("Can't acquire the RwLock correctly")))?
             .entry(term)
             .or_insert(Vec::new())
             .extend(doc_ids.into_iter().map(|v| ((v.0 - self.start) as u16, v.1)));
@@ -324,8 +324,7 @@ impl PostingBatchBuilder {
 
     pub fn build_single(self) -> Result<PostingBatch> {
         let term_dict = self.term_dict
-            .into_inner()
-            .expect("Can't acquire the RwLock correctly");
+            .into_inner();
         let mut schema_list = Vec::new();
         let mut postings: Vec<ArrayRef> = Vec::new();
         let mut freqs = Vec::new();
@@ -372,8 +371,7 @@ impl PostingBatchBuilder {
 
     pub fn build_with_idx(self, idx: &mut BTreeMap<String, TermMetaBuilder>, batch_idx: u16, partition_num: usize) -> Result<PostingBatch> {
         let term_dict = self.term_dict
-            .into_inner()
-            .expect("Can't acquire the RwLock correctly");
+            .into_inner();
         let mut schema_list = Vec::new();
         let mut postings: Vec<ArrayRef> = Vec::new();
         let mut freqs = Vec::new();

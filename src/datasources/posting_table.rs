@@ -8,17 +8,16 @@ use datafusion::{
     physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream, metrics::{ExecutionPlanMetricsSet, MetricsSet}}, common::TermMeta};
 use futures::{Stream, future::BoxFuture};
 use adaptive_hybrid_trie::TermIdx;
+use serde::{Deserialize, Serialize, ser::SerializeStruct};
 use tracing::debug;
 use rayon::prelude::*;
 
-use crate::batch::{PostingBatch, BatchRange, PostingBatchBuilder};
-
+use crate::{batch::{PostingBatch, BatchRange, PostingBatchBuilder}, utils::FastErr};
 
 pub struct PostingTable {
     schema: SchemaRef,
     term_idx: Arc<TermIdx<TermMeta>>,
     postings: Vec<Arc<Vec<PostingBatch>>>,
-    batch_builder: PostingBatchBuilder,
 }
 
 impl PostingTable {
@@ -33,7 +32,6 @@ impl PostingTable {
             schema,
             term_idx,
             postings: batches,
-            batch_builder: PostingBatchBuilder::new(range.end()),
         }
     }
 
@@ -57,6 +55,30 @@ impl PostingTable {
             .map(|v| v.iter().map(|v| v.space_usage()).sum::<usize>())
             .sum::<usize>();
         space
+    }
+
+    // pub fn serialize(&self, path: &Path) -> Result<()> {
+    //     if let Ok(f) = File::open(path) {
+    //         let writer = std::io::BufWriter::new(f);
+    //         bincode::serialize_into(writer, &self)
+    //         .map_err(|e| FastErr::IoError(e.to_string()))
+    //     } else {
+    //         let file = File::create(path)?;
+    //         let writer = std::io::BufWriter::new(file);
+    //         bincode::serialize_into(writer, &self)
+    //         .map_err(|e| FastErr::IoError(e.to_string()))
+    //     }
+    // }
+}
+
+impl Serialize for PostingTable {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer {
+        let mut state = serializer.serialize_struct("PostingTable", 4)?;
+        state.serialize_field("schema", &self.schema)?;
+        
+        state.end()
     }
 }
 

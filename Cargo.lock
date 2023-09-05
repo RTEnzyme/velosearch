@@ -354,6 +354,9 @@ dependencies = [
 name = "arrow-schema"
 version = "32.0.0"
 source = "git+https://github.com/RTEnzyme/arrow-rs?branch=columnar4inverted#d7e66c29ffb5c974af7067102e5cd6b8a635c3cf"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "arrow-select"
@@ -1276,7 +1279,6 @@ dependencies = [
  "failure",
  "futures",
  "lazy_static",
- "packed_simd_2",
  "parking_lot",
  "rand",
  "rayon",

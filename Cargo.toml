@@ -17,7 +17,7 @@ datafusion = {path="../arrow-datafusion/datafusion/core", features=["simd"]}
 # datafusion = "22.0.0"
 tokio = {version="1.0", features=["macros", "rt", "rt-multi-thread", "sync", "parking_lot"]}
 serde_json = "1.0"
-serde = {version = "1.0", features = ["derive"]}
+serde = {version = "1.0", features = ["derive", "rc"]}
 failure = "0.1.5"
 rand = "0.8.5"
 clap = {version = "4.1", features = ["derive"] }
@@ -29,7 +29,6 @@ futures = "0.3"
 rayon = "1.7"
 chrono = "0.4"
 parking_lot = "0.12"
-packed_simd_2 = "0.3.8"
 adaptive_hybrid_trie = {path="adaptive_hybrid_trie"}
 cranelift = {path = "cranelift" }
 cranelift-jit = { path = "./cranelift_jit" }
