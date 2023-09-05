@@ -26,7 +26,7 @@ impl BooleanQueryHandler {
 
         items.into_iter()
         .for_each(|e| {
-            let WikiItem{id: _, text: w, title: _} = e;
+            let WikiItem{id: _, text: w} = e;
             w.split([' ', ',', '.', ';', '-'])
             .into_iter()
             .filter(|w| {w.len() > 2}) 

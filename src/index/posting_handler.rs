@@ -21,7 +21,7 @@ pub struct PostingHandler {
 
 impl PostingHandler {
     pub fn new(base: String, path: Vec<String>, partition_nums: usize, batch_size: u32, dump_path: Option<String>) -> Self {
-        let posting_table = if let Some(p) = dump_path {
+        if let Some(p) = dump_path.clone() {
             if let Some(t) = deserialize_posting_table(p) {
                 return Self {
                     test_case: vec![],
@@ -48,7 +48,7 @@ impl PostingHandler {
         items
         .into_iter()
         .for_each(|e| {
-            let WikiItem {id: _, text: w, title: _} = e;
+            let WikiItem {id: _, text: w} = e;
 
             let mut stream = tokenizer.token_stream(w.as_str());
             while let Some(token) = stream.next() {
@@ -67,7 +67,7 @@ impl PostingHandler {
             .map(|e| e.to_string())
             .collect();
         info!("self.doc_len = {}", doc_len);
-        let posting_table = to_batch(ids, words, doc_len, partition_nums, batch_size, false);
+        let posting_table = to_batch(ids, words, doc_len, partition_nums, batch_size, dump_path);
     
         Self { 
             test_case,
@@ -116,10 +116,10 @@ impl HandlerT for PostingHandler {
                 let idx = i * 5;
                 // let predicate = BooleanPredicateBuilder::should(&[&keys[idx], &keys[idx + 1]]).unwrap();
                 // let predicate1 = BooleanPredicateBuilder::must(&[&keys[idx + 2], &keys[idx + 3], &keys[idx + 4]]).unwrap();
-                let predicate = BooleanPredicateBuilder::should(&["hello", "the"]).unwrap();
-                let predicate1 = BooleanPredicateBuilder::must(&["it", "must", "to"]).unwrap();
+                // let predicate = BooleanPredicateBuilder::should(&["hello", "the"]).unwrap();
+                let predicate = BooleanPredicateBuilder::must(&["the", "book", "of", "life"]).unwrap();
                 // let predicate = BooleanPredicateBuilder::should(&["and", "the"]).unwrap();
-                let predicate = predicate.with_must(predicate1).unwrap();
+                // let predicate = predicate.with_must(predicate1).unwrap();
                 let predicate = predicate.build();
                 info!("Predicate{:}: {:?}", i, predicate);
                 let index = ctx.boolean("__table__", predicate, false).await.unwrap();
@@ -150,7 +150,7 @@ impl HandlerT for PostingHandler {
 }
 
 
-fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: usize, batch_size: u32, is_serialize: bool) -> PostingTable {
+fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: usize, batch_size: u32, dump_path: Option<String>) -> PostingTable {
     let _span = span!(Level::INFO, "PostingHanlder to_batch").entered();
     let num_512 = (length as u32 + batch_size - 1) / batch_size;
     let num_512_partition = (num_512 + partition_nums as u32 - 1) / (partition_nums as u32);
@@ -195,12 +195,13 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
         }
     }
 
-    if is_serialize {
-        let f = File::create("posting_batch.bin").unwrap();
+    if let Some(ref p) = dump_path {
+        let path = PathBuf::from(p);
+        let f = File::create(path.join(PathBuf::from("posting_batch.bin"))).unwrap();
         let writer = BufWriter::new(f);
         bincode::serialize_into(writer, &partition_batch).unwrap();
 
-        let f = File::create("term_index.bin").unwrap();
+        let f = File::create(path.join(PathBuf::from("term_index.bin"))).unwrap();
         let writer = BufWriter::new(f);
         bincode::serialize_into(writer, &term_idx).unwrap();
     }
@@ -229,9 +230,11 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
         keys.iter().chain([&"__id__".to_string()].into_iter()).map(|v| Field::new(v.to_string(), DataType::Boolean, false)).collect()
     );
 
-    if is_serialize {
+    if let Some(ref p) = dump_path {
         // Serialize Batch Ranges
-        let f = File::create("batch_ranges.bin").unwrap();
+        let path = PathBuf::from(p);
+
+        let f = File::create(path.join(PathBuf::from("batch_ranges.bin"))).unwrap();
         let writer = BufWriter::new(f);
         bincode::serialize_into(writer, &BatchRange::new(0, (num_512_partition * batch_size) as u32)).unwrap();
     }

@@ -10,7 +10,6 @@ use crate::utils::Result;
 pub struct WikiItem {
     pub id: String,
     pub text: String,
-    pub title: String,
 }
 
 pub fn parse_wiki_file(path: &Path) -> Result<Vec<WikiItem>> {

@@ -43,7 +43,7 @@ impl SplitHandler {
 
         items.into_iter()
         .for_each(|e| {
-            let WikiItem{id: _, text: w, title: _} = e;
+            let WikiItem{id: _, text: w} = e;
             w.split([' ', ',', '.', ';', '-'])
             .into_iter()
             .filter(|w| {w.len() > 2}) 
@@ -262,7 +262,7 @@ impl SplitConstruct {
         let mut cnt = 0;
         items.into_iter()
         .for_each(|e| {
-            let WikiItem{id: _, text: w, title: _} = e;
+            let WikiItem{id: _, text: w} = e;
             w.split([' ', ',', '.', ';', '-'])
             .into_iter()
             .filter(|w| {w.len() > 2}) 
