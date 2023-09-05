@@ -1,4 +1,4 @@
-use std::{collections::{HashSet, BTreeMap}, sync::Arc};
+use std::{collections::{HashSet, BTreeMap}, sync::Arc, fs::File, io::{BufWriter, BufReader}, path::PathBuf};
 
 use async_trait::async_trait;
 use datafusion::{sql::TableReference, arrow::datatypes::{Schema, DataType, Field}};
@@ -13,7 +13,6 @@ use crate::{utils::json::{parse_wiki_dir, WikiItem}, Result, batch::{PostingBatc
 use super::HandlerT;
 
 pub struct PostingHandler {
-    doc_len: usize,
     test_case: Vec<String>,
     partition_nums: usize,
     batch_size: u32,
@@ -21,7 +20,17 @@ pub struct PostingHandler {
 }
 
 impl PostingHandler {
-    pub fn new(base: String, path: Vec<String>, partition_nums: usize, batch_size: u32) -> Self {
+    pub fn new(base: String, path: Vec<String>, partition_nums: usize, batch_size: u32, dump_path: Option<String>) -> Self {
+        let posting_table = if let Some(p) = dump_path {
+            if let Some(t) = deserialize_posting_table(p) {
+                return Self {
+                    test_case: vec![],
+                    partition_nums,
+                    batch_size,
+                    posting_table: Some(t),
+                };
+            }
+        };
         let items: Vec<WikiItem> = path
             .into_iter()
             .map(|p| parse_wiki_dir(&(base.clone() + &p)).unwrap())
@@ -58,12 +67,13 @@ impl PostingHandler {
             .map(|e| e.to_string())
             .collect();
         info!("self.doc_len = {}", doc_len);
+        let posting_table = to_batch(ids, words, doc_len, partition_nums, batch_size, false);
+    
         Self { 
-            doc_len,
             test_case,
             partition_nums,
             batch_size,
-            posting_table: Some(to_batch(ids, words, doc_len, partition_nums, batch_size)),
+            posting_table: Some(posting_table),
         }
     }
 
@@ -140,16 +150,11 @@ impl HandlerT for PostingHandler {
 }
 
 
-fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: usize, batch_size: u32) -> PostingTable {
+fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: usize, batch_size: u32, is_serialize: bool) -> PostingTable {
     let _span = span!(Level::INFO, "PostingHanlder to_batch").entered();
     let num_512 = (length as u32 + batch_size - 1) / batch_size;
     let num_512_partition = (num_512 + partition_nums as u32 - 1) / (partition_nums as u32);
 
-    let schema = Schema::new(
-        words.iter().collect::<HashSet<_>>().into_iter().chain([&"__id__".to_string()].into_iter()).map(|v| Field::new(v.to_string(), DataType::Boolean, false)).collect()
-    );
-
-    info!("The lenght of schema: {}", schema.fields().len());
     info!("num_512: {}, num_512_partition: {}", num_512, num_512_partition);
     let mut partition_batch = Vec::new();
     let mut term_idx: BTreeMap<String, TermMetaBuilder> = BTreeMap::new();
@@ -189,6 +194,17 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
             debug!("The ({}, {}) batch len: {}", i, j, pp.doc_len())
         }
     }
+
+    if is_serialize {
+        let f = File::create("posting_batch.bin").unwrap();
+        let writer = BufWriter::new(f);
+        bincode::serialize_into(writer, &partition_batch).unwrap();
+
+        let f = File::create("term_index.bin").unwrap();
+        let writer = BufWriter::new(f);
+        bincode::serialize_into(writer, &term_idx).unwrap();
+    }
+
     let partition_batch = partition_batch
         .into_iter()
         .enumerate()
@@ -201,12 +217,24 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
 
     let mut keys = Vec::new();
     let mut values = Vec::new();
+
     term_idx
         .into_iter()
         .for_each(|m| {
             keys.push(m.0); 
             values.push(m.1.build());
         });
+
+    let schema = Schema::new(
+        keys.iter().chain([&"__id__".to_string()].into_iter()).map(|v| Field::new(v.to_string(), DataType::Boolean, false)).collect()
+    );
+
+    if is_serialize {
+        // Serialize Batch Ranges
+        let f = File::create("batch_ranges.bin").unwrap();
+        let writer = BufWriter::new(f);
+        bincode::serialize_into(writer, &BatchRange::new(0, (num_512_partition * batch_size) as u32)).unwrap();
+    }
     #[cfg(feature = "hash_idx")]
     let term_idx = Arc::new(TermIdx { term_map: map });
 
@@ -221,3 +249,61 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
     )
 }
 
+fn deserialize_posting_table(dump_path: String) -> Option<PostingTable> {
+    info!("Deserialize data from {:}", dump_path);
+    let path = PathBuf::from(dump_path);
+    let posting_batch: Vec<Vec<PostingBatchBuilder>>;
+    let batch_range: BatchRange;
+    let term_idx: BTreeMap<String, TermMetaBuilder>;
+    // posting_batch.bin
+    if let Ok(f) = File::open(path.join(PathBuf::from("posting_batch.bin"))) {
+        let reader = BufReader::new(f);
+        posting_batch = bincode::deserialize_from(reader).unwrap();
+    } else {
+        return None;
+    }
+    // batch_range.bin
+    if let Ok(f) = File::open(path.join(PathBuf::from("batch_ranges.bin"))) {
+        let reader = BufReader::new(f);
+        batch_range = bincode::deserialize_from(reader).unwrap();
+    } else {
+        return None;
+    }
+    // term_keys.bin
+    if let Ok(f) = File::open(path.join(PathBuf::from("term_index.bin"))) {
+        let reader = BufReader::new(f);
+        term_idx = bincode::deserialize_from(reader).unwrap();
+    } else {
+        return None;
+    }
+
+    let schema = Schema::new(
+        term_idx.keys().chain([&"__id__".to_string()].into_iter()).map(|v| Field::new(v.to_string(), DataType::Boolean, false)).collect()
+    );
+    let partition_batch = posting_batch
+        .into_iter()
+        .map(|b| Arc::new(
+            b
+            .into_iter()
+            .map(|b| b.build_single().unwrap() ).collect()))
+        .collect();
+
+    let mut keys = Vec::new();
+    let mut values = Vec::new();
+
+    term_idx
+        .into_iter()
+        .for_each(|m| {
+            keys.push(m.0); 
+            values.push(m.1.build());
+        });
+
+    let term_idx = Arc::new(TermIdx::new(keys, values, 20));
+
+    Some(PostingTable::new(
+        Arc::new(schema),
+        term_idx,
+        partition_batch,
+        &batch_range,
+    ))
+}

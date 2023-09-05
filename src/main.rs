@@ -30,6 +30,7 @@ fn main() -> Result<()> {
                 args.path,
                 args.partition_num.expect("Should have partition_num arg"),
                 args.batch_size.unwrap_or(512),
+                args.dump_path,
             ))
         }
         Handler::Tantivy => {

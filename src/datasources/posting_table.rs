@@ -8,11 +8,11 @@ use datafusion::{
     physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream, metrics::{ExecutionPlanMetricsSet, MetricsSet}}, common::TermMeta};
 use futures::{Stream, future::BoxFuture};
 use adaptive_hybrid_trie::TermIdx;
-use serde::{Deserialize, Serialize, ser::SerializeStruct};
+use serde::{Serialize, ser::SerializeStruct};
 use tracing::debug;
 use rayon::prelude::*;
 
-use crate::{batch::{PostingBatch, BatchRange, PostingBatchBuilder}, utils::FastErr};
+use crate::batch::{PostingBatch, BatchRange};
 
 pub struct PostingTable {
     schema: SchemaRef,
@@ -25,7 +25,7 @@ impl PostingTable {
         schema: SchemaRef,
         term_idx: Arc<TermIdx<TermMeta>>,
         batches: Vec<Arc<Vec<PostingBatch>>>,
-        range: &BatchRange,
+        _range: &BatchRange,
     ) -> Self {
         // construct field map to index the position of the fields in schema
         Self {

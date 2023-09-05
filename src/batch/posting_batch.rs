@@ -1,13 +1,13 @@
-use std::{sync::{Arc, RwLock}, ops::Index, collections::{HashMap, BTreeMap}, cmp::max, mem::size_of_val, ptr::NonNull, cell::RefCell};
+use std::{sync::Arc, ops::Index, collections::{HashMap, BTreeMap}, cmp::max, mem::size_of_val, ptr::NonNull, cell::RefCell};
 
 use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray}, record_batch::RecordBatch, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
-use serde::{Serialize, Deserialize, ser::SerializeStruct, Deserializer};
+use serde::{Serialize, Deserialize};
 use tracing::debug;
 use crate::utils::{Result, FastErr};
 
 /// The doc_id range [start, end) Batch range determines the  of relevant batch.
 /// nums32 = (end - start) / 32
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BatchRange {
     start: u32, 
     end: u32,
@@ -420,7 +420,7 @@ impl PostingBatchBuilder {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TermMetaBuilder {
     distribution: Vec<Vec<bool>>,
     nums: Vec<u32>,

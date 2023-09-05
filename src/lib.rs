@@ -39,6 +39,9 @@ pub struct FastArgs {
 
     #[arg(long)]
     pub base: String,
+
+    #[arg(long, short)]
+    pub dump_path: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, ValueEnum, Debug)]
