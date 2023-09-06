@@ -111,7 +111,7 @@ impl HandlerT for PostingHandler {
             // handlers.push(tokio::spawn(async move {
                 debug!("start construct query");
             let mut time_distri = Vec::new();
-            let round = 14;
+            let round = 1;
             for i in 0..round {
                 let idx = i * 5;
                 // let predicate = BooleanPredicateBuilder::should(&[&keys[idx], &keys[idx + 1]]).unwrap();

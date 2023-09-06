@@ -126,7 +126,7 @@ impl PostingBatch {
     }
 
     pub fn project_fold(&self, indices: &[Option<usize>], projected_schema: SchemaRef) -> Result<RecordBatch> {
-        let bitmask_size: usize = self.range.len() as usize;
+        let bitmask_size: usize = 512;
         let mut batches: Vec<ArrayRef> = Vec::with_capacity(indices.len());
         for idx in indices {
             // To be optimized, we can convert bitvec to BooleanArray
@@ -366,7 +366,7 @@ impl PostingBatchBuilder {
             Arc::new(Schema::new(schema_list)),
             postings,
             freqs,
-            Arc::new(BatchRange::new(self.start, self.current + 1)))
+            Arc::new(BatchRange::new(self.start, self.start + 512)))
     }
 
     pub fn build_with_idx(self, idx: &mut BTreeMap<String, TermMetaBuilder>, batch_idx: u16, partition_num: usize) -> Result<PostingBatch> {
@@ -415,7 +415,7 @@ impl PostingBatchBuilder {
             Arc::new(Schema::new(schema_list)),
             postings,
             freqs,
-            Arc::new(BatchRange::new(self.start, self.current + 1))
+            Arc::new(BatchRange::new(self.start, self.start + 512))
         )
     }
 }
