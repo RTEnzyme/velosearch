@@ -111,7 +111,7 @@ impl HandlerT for PostingHandler {
             // handlers.push(tokio::spawn(async move {
                 debug!("start construct query");
             let mut time_distri = Vec::new();
-            let round = 1;
+            let round = 14;
             for i in 0..round {
                 let idx = i * 5;
                 // let predicate = BooleanPredicateBuilder::should(&[&keys[idx], &keys[idx + 1]]).unwrap();
@@ -257,7 +257,7 @@ fn deserialize_posting_table(dump_path: String) -> Option<PostingTable> {
     let path = PathBuf::from(dump_path);
     let posting_batch: Vec<Vec<PostingBatchBuilder>>;
     let batch_range: BatchRange;
-    let term_idx: BTreeMap<String, TermMetaBuilder>;
+    let mut term_idx: BTreeMap<String, TermMetaBuilder>;
     // posting_batch.bin
     if let Ok(f) = File::open(path.join(PathBuf::from("posting_batch.bin"))) {
         let reader = BufReader::new(f);
@@ -285,10 +285,12 @@ fn deserialize_posting_table(dump_path: String) -> Option<PostingTable> {
     );
     let partition_batch = posting_batch
         .into_iter()
-        .map(|b| Arc::new(
+        .enumerate()
+        .map(|(i, b)| Arc::new(
             b
             .into_iter()
-            .map(|b| b.build_single().unwrap() ).collect()))
+            .enumerate()
+            .map(|(j, b)| b.build_with_idx(&mut term_idx, j as u16, i).unwrap()).collect()))
         .collect();
 
     let mut keys = Vec::new();

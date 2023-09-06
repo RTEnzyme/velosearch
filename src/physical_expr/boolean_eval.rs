@@ -198,7 +198,7 @@ impl PhysicalExpr for BooleanEvalExpr {
     }
     
     fn evaluate(&self, batch: &RecordBatch) -> datafusion::common::Result<ColumnarValue> {
-        let batch_len = batch.num_rows();
+        let batch_len = batch.num_rows() / 8;
         let predicate = self.predicate.as_ref().get();
         let predicate_ref = unsafe {predicate.as_ref().unwrap() };
         match predicate_ref {
@@ -208,7 +208,7 @@ impl PhysicalExpr for BooleanEvalExpr {
                 Ok(ColumnarValue::Array(array))
             }
             PhysicalPredicate::Or { .. } => {
-                let res = predicate_ref.eval(batch, vec![u8::MAX; batch_len], false)?;
+                let res = predicate_ref.eval(batch, vec![0; batch_len], false)?;
                 let array = Arc::new(build_boolean_array(res, batch_len));
                 Ok(ColumnarValue::Array(array))
             }

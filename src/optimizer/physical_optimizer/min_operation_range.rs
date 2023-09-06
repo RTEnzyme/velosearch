@@ -126,6 +126,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                 })
                 .collect();
             debug!("Collect term statistics");
+            debug!("partition 0 min_range len: {:?}", partition_range[0].true_count());
             self.min_range = Some(partition_range);
             self.partition_stats = Some(term_stats);
             debug!("End Pre_visit PostingExec");

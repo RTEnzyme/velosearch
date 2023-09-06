@@ -364,7 +364,11 @@ impl Stream for PostingStream {
         }
         let data = self.data.as_mut() .unwrap();
         let poll = Poll::Ready(if data.len() > 0 {
-            let batch = data.remove(0);
+            let data = self.data.take().unwrap();
+            self.data = Some(vec![]);
+            let row_num = data.iter().map(|v| v.num_rows()).sum();
+            let batch = concat_batches(&self.schema, &data, row_num)?;
+            debug!("end combine");
             // return just the columns requested
             Some(Ok(batch))
         } else {
@@ -393,6 +397,22 @@ pub fn make_posting_schema(fields: Vec<&str>) -> Schema {
         .collect(), vec![Field::new("__id__", DataType::UInt32, false)]].concat()
     )
 }
+
+/// Concatenates an array of `RecordBatch` into one batch
+pub fn concat_batches(
+    schema: &SchemaRef,
+    batches: &[RecordBatch],
+    row_count: usize,
+) -> Result<RecordBatch> {
+    debug!(
+        "Combined {} batches containing {} rows",
+        batches.len(),
+        row_count
+    );
+    let b = datafusion::arrow::compute::concat_batches(schema, batches)?;
+    Ok(b)
+}
+
 
 #[cfg(test)]
 mod tests {
