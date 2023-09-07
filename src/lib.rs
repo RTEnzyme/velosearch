@@ -3,6 +3,7 @@
 #![feature(stdsimd)]
 #![feature(is_sorted)]
 #![feature(sync_unsafe_cell)]
+#![feature(slice_flatten)]
 
 extern crate datafusion;
 

@@ -89,7 +89,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                     let mut length = None;
                     for v in &term_stats {
                         if let Some(t) = v {
-                            length = t.distribution[0].as_ref().map(|v| v.len());
+                            length = Some(t.distribution[0].len());
                         }
                     }
                     if let Some(length) = length {
@@ -97,10 +97,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                         let distris = term_stats.iter()
                             .map(|t| {
                                 let res = match t {
-                                    Some(t) => match &t.distribution[p] {
-                                        Some(t) => t.clone(),
-                                        None => empty_array.clone(),
-                                    },
+                                    Some(t) => t.distribution[p].clone(),
                                     None => empty_array.clone(),
                                 };
                                 res as Arc<dyn Array>

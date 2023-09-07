@@ -111,7 +111,7 @@ impl HandlerT for PostingHandler {
             // handlers.push(tokio::spawn(async move {
                 debug!("start construct query");
             let mut time_distri = Vec::new();
-            let round = 1;
+            let round = 5;
             for i in 0..round {
                 let idx = i * 5;
                 // let predicate = BooleanPredicateBuilder::should(&[&keys[idx], &keys[idx + 1]]).unwrap();
@@ -159,11 +159,7 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
     let mut partition_batch = Vec::new();
     let mut term_idx: BTreeMap<String, TermMetaBuilder> = BTreeMap::new();
     for i in 0..partition_nums {
-        let mut batches = Vec::new();
-        for j in 0..num_512_partition {
-            batches.push(PostingBatchBuilder::new((i as u32 * batch_size * num_512_partition + j as u32 * batch_size) as u32));
-        }
-        partition_batch.push(batches);
+        partition_batch.push(PostingBatchBuilder::new());
     }
     let mut current = (0, 0);
     let mut thredhold = batch_size;
@@ -186,13 +182,11 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
                 }
                 thredhold += batch_size;
             }
-            partition_batch[current.0][current.1].push_term(word, id).expect("Shoud push term correctly");
+            partition_batch[current.0].push_term(word, id).expect("Shoud push term correctly");
             entry.set_true(current.1, current.0, id);
         });
     for (i, p) in partition_batch.iter().enumerate() {
-        for (j, pp) in p.into_iter().enumerate() {
-            debug!("The ({}, {}) batch len: {}", i, j, pp.doc_len())
-        }
+        debug!("The partition {} batch len: {}", i, p.doc_len())
     }
 
     if let Some(ref p) = dump_path {
@@ -210,10 +204,8 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
         .into_iter()
         .enumerate()
         .map(|(n, b )| Arc::new(
-            b
-            .into_iter()
-            .enumerate()
-            .map(|(i, b)| b.build_with_idx(&mut term_idx, i as u16, n).unwrap() ).collect()))
+            b.build_with_idx(&mut term_idx, n).unwrap() 
+        ))
         .collect();
 
     let mut keys = Vec::new();
@@ -255,7 +247,7 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
 fn deserialize_posting_table(dump_path: String) -> Option<PostingTable> {
     info!("Deserialize data from {:}", dump_path);
     let path = PathBuf::from(dump_path);
-    let posting_batch: Vec<Vec<PostingBatchBuilder>>;
+    let posting_batch: Vec<PostingBatchBuilder>;
     let batch_range: BatchRange;
     let mut term_idx: BTreeMap<String, TermMetaBuilder>;
     // posting_batch.bin
@@ -287,10 +279,8 @@ fn deserialize_posting_table(dump_path: String) -> Option<PostingTable> {
         .into_iter()
         .enumerate()
         .map(|(i, b)| Arc::new(
-            b
-            .into_iter()
-            .enumerate()
-            .map(|(j, b)| b.build_with_idx(&mut term_idx, j as u16, i).unwrap()).collect()))
+            b.build_with_idx(&mut term_idx, i).unwrap()
+        ))
         .collect();
 
     let mut keys = Vec::new();
