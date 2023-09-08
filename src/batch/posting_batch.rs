@@ -1,6 +1,6 @@
 use std::{sync::Arc, ops::Index, collections::{HashMap, BTreeMap}, cmp::max, mem::size_of_val, ptr::NonNull, cell::RefCell, arch::x86_64::{_pext_u64, _blsr_u64}};
 
-use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray, GenericBinaryArray, GenericBinaryBuilder}, record_batch::RecordBatch, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
+use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray, GenericBinaryArray, GenericBinaryBuilder}, record_batch::{RecordBatch, RecordBatchOptions}, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
 use serde::{Serialize, Deserialize};
 use tracing::debug;
 use crate::utils::{Result, FastErr};
@@ -107,6 +107,7 @@ impl PostingBatch {
         boundary_idx: usize,
         min_range: u64,
     ) -> Result<RecordBatch> {
+        debug!("project_fold");
         const CHUNK_SIZE: usize = 64;
         let valid_batch_num = min_range.count_ones() as usize;
         let mut batches: Vec<ArrayRef> = Vec::with_capacity(indices.len());
@@ -132,16 +133,19 @@ impl PostingBatch {
             let boundary = &self.boundary[idx];
 
             let boundary_len = if boundary_idx < boundary.len() - 1 {
-                (boundary[boundary_idx + 1] - boundary[boundary_idx]) as usize
+                (boundary[boundary_idx + 1] - boundary[boundary_idx] + 1) as usize
+            } else if  boundary_idx == boundary.len() - 1 {
+                posting.len() - boundary[boundary_idx] as usize - 1
             } else {
-                posting.len() - boundary[boundary_idx] as usize
+                batches.push(Arc::new(BooleanArray::from(vec![] as Vec<bool>)));
+                continue;
             };
 
             let mut valid_batch: Vec<[u8; 64]> =vec![[0; 64]; valid_batch_num];
             let mut write_mask = unsafe { _pext_u64(distri, min_range) };
 
             let mut cnt = 0;
-            let mut write_pos = write_mask.trailing_ones() as usize;
+            let mut write_pos = write_mask.trailing_zeros() as usize;
             write_mask = clear_lowest_set_bit(write_mask);
             for i in 0..boundary_len.min(64) {
                 if distri & 1 << i == 0 {
@@ -170,7 +174,9 @@ impl PostingBatch {
             batches.push(batch);
         }
         batches.insert(projected_schema.index_of("__id__").expect("Should have __id__ field"), Arc::new(UInt32Array::from_iter_values((self.range.start).. (self.range.start + 32 * self.range.nums32))));
-        Ok(RecordBatch::try_new(projected_schema, batches)?)
+        debug!("end of project fold");
+        let option = RecordBatchOptions::new().with_row_count(Some(64 * 512));
+        Ok(RecordBatch::try_new_with_options(projected_schema, batches, &option)?)
     }
 
     pub fn project_fold_with_freqs(
@@ -332,6 +338,7 @@ impl PostingBatchBuilder {
                 let mut cnter = 0;
                 let mut posting_builder = GenericBinaryBuilder::new();
                 let mut builder_len = 0;
+                let mut batch_num = 0;
 
                 idx.get_mut(&k).unwrap().add_idx(i as u32, partition_num);
                 let mut freq: Vec<Option<Vec<Option<u8>>>> = vec![None; 4];
@@ -342,11 +349,13 @@ impl PostingBatchBuilder {
                         buffer.push(p);
                     } else {
                         let base = cnter;
-                        let skip_num = (p - cnter) / 512;
+                        let skip_num = (p - cnter + 1) / 512;
                         cnter += skip_num * 512;
-                        for _ in 0..skip_num {
+                        batch_num += skip_num;
+                        if batch_num % 64 == 0 {
                             boundary.push(builder_len);
                         }
+                        
                         if buffer.len() > 16 {
                             let mut bitmap = vec![0; 64];
                             for i in &buffer {

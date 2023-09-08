@@ -10,7 +10,6 @@ use futures::Stream;
 use adaptive_hybrid_trie::TermIdx;
 use serde::{Serialize, ser::SerializeStruct};
 use tracing::debug;
-use rayon::prelude::*;
 
 use crate::batch::{PostingBatch, BatchRange};
 
@@ -296,7 +295,6 @@ impl PostingStream {
     ) -> Result<Self> {
         debug!("Try new a PostingStream");
         let valid_cnt = min_range.true_count();
-        let data_len = valid_cnt * 512;
         debug!("Obtain the valid distri");
         debug!("Finish Trying new a PostingStream");
         Ok(Self {
@@ -314,26 +312,35 @@ impl PostingStream {
 impl Stream for PostingStream {
     type Item = Result<RecordBatch>;
 
-    fn poll_next(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
-        if self.index < self.min_range.len() / 64 {
-            return Poll::Ready(None);
-        }
-        if self.is_score {
-            let distris: Vec<Option<u64>> = self.distris.iter()
-                .map(|v| {
-                    match v {
-                        Some(v) => {
-                            Some(unsafe { v.values().slice_with_length(self.index * 64, 64).align_to::<u64>().1[0] })
+    fn poll_next(mut self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
+        loop {
+            if self.index >= self.min_range.len() / 64 {
+                return Poll::Ready(None);
+            }
+            if ! self.is_score {
+                let min_range = unsafe {self.min_range.values().slice_with_length(self.index * 8, 8).align_to::<u64>().1[0] };
+                debug!("min_range: {:}", min_range);
+                if min_range == 0 {
+                    self.index += 1;
+                    continue;
+                }
+                let distris: Vec<Option<u64>> = self.distris.iter()
+                    .map(|v| {
+                        match v {
+                            Some(v) => {
+                                Some(unsafe { v.values().slice_with_length(self.index * 8, 8).align_to::<u64>().1[0] })
+                            }
+                            None => None
                         }
-                        None => None
-                    }
-                })
-                .collect();
-            let min_range = unsafe {self.min_range.values().slice_with_length(self.index * 64, 64).align_to::<u64>().1[0] };
-            let batch = self.posting_lists.project_fold(&self.indices, self.schema.clone(), &distris, self.index, min_range).unwrap();
-            Poll::Ready(Some(Ok(batch)))
-        } else {
-            unreachable!()
+                    })
+                    .collect();
+                let batch = self.posting_lists.project_fold(&self.indices, self.schema.clone(), &distris, self.index, min_range).unwrap();
+                self.index += 1;
+                debug!("batch len: {:}", batch.num_rows());
+                return Poll::Ready(Some(Ok(batch)));
+            } else {
+                unreachable!()
+            }
         }
     }
 
