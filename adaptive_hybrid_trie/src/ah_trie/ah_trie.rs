@@ -1,8 +1,7 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{atomic::{AtomicUsize, Ordering}, RwLock};
 
 use dashmap::{DashMap, DashSet};
 use fst_rs::FST;
-use tokio::sync::RwLock;
 use std::sync::Arc;
 use tracing::debug;
 
@@ -75,24 +74,24 @@ impl<T: Clone+Send+Sync+'static> AHTrie<T> {
 
     pub fn get(&self, key: &str) -> Option<T> {
         futures::executor::block_on(async {
-            if self.is_sample() {
-                self.trace(key).await;
-            }
-            self.inner.as_ref().read().await.get(key).cloned()
+            // if self.is_sample() {
+            //     self.trace(key).await;
+            // }
+            self.inner.as_ref().read().unwrap().get(key).cloned()
         })
     }
 
     pub async fn get_async(&self, key: &str) -> Option<T> {
-        if self.is_sample() {
-            self.trace(key).await;
-        }
-        self.inner.as_ref().read().await.get(key).cloned()
+        // if self.is_sample() {
+        //     self.trace(key).await;
+        // }
+        self.inner.as_ref().read().unwrap().get(key).cloned()
     }
 
     pub fn get_mut<F>(&self, key: &str, f: F)
     where F: Fn(&mut T),
     {
-        let mut block = self.inner.blocking_write();
+        let mut block = self.inner.write().unwrap();
         match block.get_offset(key) {
             Some(v) => f(block.get_mut(v)),
             None => unreachable!(),
@@ -135,10 +134,10 @@ impl<T: Clone+Send+Sync+'static> AHTrie<T> {
 }
 
 async fn convert_encoding<T: Clone+Send+Sync>(ah_trie_root: Arc<RwLock<AHTrieInner<T>>>, key: &str, encoding: Encoding) {
-    let cur_encoding = ah_trie_root.read().await.encoding(&key);
+    let cur_encoding = ah_trie_root.read().unwrap().encoding(&key);
     match (cur_encoding, encoding) {
         (Encoding::Art, Encoding::Fst(_)) => {
-            let inner_read_guard = ah_trie_root.read().await;
+            let inner_read_guard = ah_trie_root.read().unwrap();
             let kvs = inner_read_guard.prefix_keys(&key[..CUT_OFF]);
             let mut keys = Vec::new();
             let mut values = Vec::new();
@@ -153,20 +152,20 @@ async fn convert_encoding<T: Clone+Send+Sync>(ah_trie_root: Arc<RwLock<AHTrieInn
             // Must drop RwLockReadGuard before acquiring RwLockWriteGuard
             drop(inner_read_guard);
 
-            let mut inner = ah_trie_root.write().await;
+            let mut inner = ah_trie_root.write().unwrap();
             for key in keys {
                 inner.remove_bytes(&key);
             }
             inner.insert(&key[..CUT_OFF], ChildNode::Fst(fst));
         }
         (Encoding::Fst(matched_length), Encoding::Art) => {
-            let inner_read_guard = ah_trie_root.read().await;
+            let inner_read_guard = ah_trie_root.read().unwrap();
             let fst = inner_read_guard.get_fst(&key[..matched_length]).unwrap().clone();
             // Safety:
             // Must drop RwLockReadGuard before acquiring RwLockWriteGuard
             drop(inner_read_guard);
 
-            let mut inner_write_guard = ah_trie_root.write().await;
+            let mut inner_write_guard = ah_trie_root.write().unwrap();
             inner_write_guard.remove(&key[..matched_length]);
             fst.iter()
                 .for_each(|(k, v)| {
