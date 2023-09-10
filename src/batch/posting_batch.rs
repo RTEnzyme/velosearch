@@ -122,13 +122,17 @@ impl PostingBatch {
             let idx = unsafe{ idx.unwrap_unchecked() as usize };
             let distri = unsafe { distri.unwrap_unchecked() };
 
-            let posting = self.postings.get(idx).cloned().ok_or_else(|| {
-                FastErr::InternalErr(format!(
-                    "project index {} out of bounds, max field {}",
-                    idx,
-                    self.postings.len()
-                ))
-            })?;
+            let posting = if idx != usize::MAX {
+                self.postings.get(idx).cloned().ok_or_else(|| {
+                    FastErr::InternalErr(format!(
+                        "project index {} out of bounds, max field {}",
+                        idx,
+                        self.postings.len()
+                    ))
+                })?
+            } else {
+                continue;
+            };
 
             let boundary = &self.boundary[idx];
 
@@ -142,13 +146,14 @@ impl PostingBatch {
             };
 
             let mut valid_batch: Vec<[u8; 64]> =vec![[0; 64]; valid_batch_num];
+            let valid_mask = unsafe { _pext_u64(min_range, distri) };
             let mut write_mask = unsafe { _pext_u64(distri, min_range) };
 
             let mut cnt = 0;
             let mut write_pos = write_mask.trailing_zeros() as usize;
             write_mask = clear_lowest_set_bit(write_mask);
             for i in 0..boundary_len.min(64) {
-                if distri & 1 << i == 0 {
+                if valid_mask & 1 << i == 0 {
                     continue
                 }
                 let batch = posting.value(cnt);
@@ -342,13 +347,12 @@ impl PostingBatchBuilder {
 
                 idx.get_mut(&k).unwrap().add_idx(i as u32, partition_num);
                 let mut freq: Vec<Option<Vec<Option<u8>>>> = vec![None; 4];
-                let mut buffer = Vec::new();
+                let mut buffer: Vec<u16> = Vec::new();
                 v.into_iter()
                 .for_each(|(p, f)| {
                     if p - cnter < 512 {
-                        buffer.push(p);
+                        buffer.push((p - cnter) as u16);
                     } else {
-                        let base = cnter;
                         let skip_num = (p - cnter + 1) / 512;
                         cnter += skip_num * 512;
                         batch_num += skip_num;
@@ -359,7 +363,7 @@ impl PostingBatchBuilder {
                         if buffer.len() > 16 {
                             let mut bitmap = vec![0; 64];
                             for i in &buffer {
-                                let off = *i - base;
+                                let off = *i;
                                 bitmap[(off >> 3) as usize] |= 1 << (off % (1 << 8));
                             }
                             posting_builder.append_value(bitmap);

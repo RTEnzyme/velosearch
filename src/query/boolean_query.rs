@@ -114,10 +114,10 @@ impl BooleanQuery {
         };
         match predicate {
             Expr::BooleanQuery(expr) => {
-                let project_plan = boolean_project(self.plan, project_exprs, input_schema).unwrap();
-                let project_plan = LogicalPlanBuilder::from(project_plan).build()?;
+                // let project_plan = boolean_project(self.plan, project_exprs, input_schema).unwrap();
+                // let project_plan = LogicalPlanBuilder::from(project_plan).build()?;
                 Ok(Self {
-                    plan: LogicalPlanBuilder::from(project_plan).boolean(Expr::BooleanQuery(expr), is_score)?.build()?,
+                    plan: LogicalPlanBuilder::from(self.plan).boolean(Expr::BooleanQuery(expr), is_score)?.build()?,
                     session_state: self.session_state 
                 })
             },

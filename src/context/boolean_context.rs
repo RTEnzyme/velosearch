@@ -5,10 +5,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion::{
     execution::{context::{SessionState, QueryPlanner}, runtime_env::RuntimeEnv}, 
-    prelude::{SessionConfig, Expr, Column}, sql::TableReference, logical_expr::{LogicalPlanBuilder, LogicalPlan}, 
+    prelude::{SessionConfig, Expr, Column}, sql::TableReference, logical_expr::{LogicalPlanBuilder, LogicalPlan, TableSource}, 
     datasource::{provider_as_source, TableProvider}, error::DataFusionError, 
     optimizer::OptimizerRule, 
-    physical_optimizer::PhysicalOptimizerRule, scalar::ScalarValue, physical_plan::{PhysicalPlanner, ExecutionPlan}
+    physical_optimizer::PhysicalOptimizerRule, scalar::ScalarValue, physical_plan::{PhysicalPlanner, ExecutionPlan}, arrow::datatypes::Schema
 };
 use parking_lot::RwLock;
 use tokio::time::Instant;
@@ -103,7 +103,7 @@ impl BooleanContext {
         let project_exprs = [binary_expr_columns(&predicate), vec![Column::from_name("__id__")]].concat();
         let project = project_exprs
             .iter()
-            .map(|e| schema.index_of(&e.name).unwrap())
+            .map(|e| schema.index_of(&e.name).unwrap_or(usize::MAX))
             .collect();
         if let Expr::BooleanQuery(expr) = predicate {
             let plan = LogicalPlanBuilder::scan(
@@ -111,6 +111,37 @@ impl BooleanContext {
                 provider_as_source(Arc::clone(&provider)),
                 Some(project),
             )?.boolean(Expr::BooleanQuery(expr), is_score)?.build()?;
+            Ok(BooleanQuery::new(
+                plan,
+                self.state(),
+            ))
+        } else {
+            Err(FastErr::UnimplementErr(format!("")))
+        }
+    }
+
+    /// Without provider overhide
+    pub async fn boolean_with_provider<'a>(
+        &self,
+        table_source: Arc<dyn TableSource>,
+        schema: &Schema,
+        predicate: Expr,
+        is_score: bool,
+    ) -> Result<BooleanQuery> {
+        debug!("start boolean builder");
+        let project_exprs = [binary_expr_columns(&predicate), vec![Column::from_name("__id__")]].concat();
+        let project = project_exprs
+            .iter()
+            .map(|e| schema.index_of(&e.name).unwrap_or(usize::MAX))
+            .collect();
+        debug!("end project");
+        if let Expr::BooleanQuery(expr) = predicate {
+            let plan = LogicalPlanBuilder::scan(
+                "__table__",
+                table_source,
+                Some(project),
+            )?.boolean(Expr::BooleanQuery(expr), is_score)?.build()?;
+            debug!("end build boolean query");
             Ok(BooleanQuery::new(
                 plan,
                 self.state(),

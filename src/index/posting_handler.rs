@@ -1,21 +1,20 @@
-use std::{collections::{HashSet, BTreeMap}, sync::Arc, fs::File, io::{BufWriter, BufReader}, path::PathBuf};
+use std::{collections::{HashSet, BTreeMap, HashMap}, sync::Arc, fs::File, io::BufWriter, path::PathBuf};
 
 use async_trait::async_trait;
-use datafusion::{sql::TableReference, arrow::datatypes::{Schema, DataType, Field}};
+use datafusion::{sql::TableReference, arrow::datatypes::{Schema, DataType, Field}, datasource::provider_as_source};
 use adaptive_hybrid_trie::TermIdx;
 use rand::{thread_rng, seq::IteratorRandom};
 use tantivy::tokenizer::{TextAnalyzer, SimpleTokenizer, RemoveLongFilter, LowerCaser, Stemmer};
 use tokio::time::Instant;
 use tracing::{info, span, Level, debug};
 
-use crate::{utils::json::{parse_wiki_dir, WikiItem}, Result, batch::{PostingBatchBuilder, BatchRange, TermMetaBuilder}, datasources::posting_table::PostingTable, BooleanContext, query::boolean_query::BooleanPredicateBuilder, jit::AOT_PRIMITIVES};
+use crate::{utils::{json::{parse_wiki_dir, WikiItem}, builder::deserialize_posting_table}, Result, batch::{PostingBatchBuilder, BatchRange, TermMetaBuilder}, datasources::posting_table::PostingTable, BooleanContext, query::boolean_query::BooleanPredicateBuilder, jit::AOT_PRIMITIVES};
 
 use super::HandlerT;
 
 pub struct PostingHandler {
     test_case: Vec<String>,
     partition_nums: usize,
-    batch_size: u32,
     posting_table: Option<PostingTable>,
 }
 
@@ -26,7 +25,6 @@ impl PostingHandler {
                 return Self {
                     test_case: vec![],
                     partition_nums,
-                    batch_size,
                     posting_table: Some(t),
                 };
             }
@@ -72,7 +70,6 @@ impl PostingHandler {
         Self { 
             test_case,
             partition_nums,
-            batch_size,
             posting_table: Some(posting_table),
         }
     }
@@ -111,7 +108,10 @@ impl HandlerT for PostingHandler {
             // handlers.push(tokio::spawn(async move {
                 debug!("start construct query");
             let mut time_distri = Vec::new();
-            let round = 15;
+            let round = 1;
+            let provider = ctx.index_provider("__table__").await?;
+            let schema = &provider.schema();
+            let table_source = provider_as_source(Arc::clone(&provider));
             for i in 0..round {
                 let idx = i * 5;
                 // let predicate = BooleanPredicateBuilder::should(&[&keys[idx], &keys[idx + 1]]).unwrap();
@@ -119,13 +119,13 @@ impl HandlerT for PostingHandler {
                 // let predicate = BooleanPredicateBuilder::should(&["hello", "the"]).unwrap();
                 // let predicate = BooleanPredicateBuilder::must(&["hot", "spring", "south", "dakota"]).unwrap();
                 // let predicate = BooleanPredicateBuilder::must(&["civil", "war", "battlefield"]).unwrap();
-                let predicate = BooleanPredicateBuilder::must(&["the", "book", "of", "life"]).unwrap();
+                let timer = Instant::now();
+                let predicate = BooleanPredicateBuilder::must(&["david", "lee", "roth"]).unwrap();
                 // let predicate = BooleanPredicateBuilder::should(&["and", "the"]).unwrap();
                 // let predicate = predicate.with_must(predicate1).unwrap();
                 let predicate = predicate.build();
                 info!("Predicate{:}: {:?}", i, predicate);
-                let index = ctx.boolean("__table__", predicate, false).await.unwrap();
-                let timer = Instant::now();
+                let index = ctx.boolean_with_provider(table_source.clone(), &schema, predicate, false).await.unwrap();
                     index
                     // .explain(false, true).unwrap()
                     // .show().await.unwrap();
@@ -219,10 +219,20 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
             keys.push(m.0); 
             values.push(m.1.build());
         });
-
-    let schema = Schema::new(
-        keys.iter().chain([&"__id__".to_string()].into_iter()).map(|v| Field::new(v.to_string(), DataType::Boolean, false)).collect()
-    );
+    let (fields_index, fields) = keys.iter()
+        .chain([&"__id__".to_string()].into_iter())
+        .enumerate()
+        .map(|(i, v)| {
+            let idx = (v.to_string(), i);
+            let field = Field::new(v.to_string(), DataType::Boolean, false);
+            (idx, field)
+        })
+        .unzip();
+    let schema = Schema {
+        fields,
+        metadata: HashMap::new(),
+        fields_index: Some(fields_index),
+    };
 
     if let Some(ref p) = dump_path {
         // Serialize Batch Ranges
@@ -246,61 +256,3 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
     )
 }
 
-fn deserialize_posting_table(dump_path: String) -> Option<PostingTable> {
-    info!("Deserialize data from {:}", dump_path);
-    let path = PathBuf::from(dump_path);
-    let posting_batch: Vec<PostingBatchBuilder>;
-    let batch_range: BatchRange;
-    let mut term_idx: BTreeMap<String, TermMetaBuilder>;
-    // posting_batch.bin
-    if let Ok(f) = File::open(path.join(PathBuf::from("posting_batch.bin"))) {
-        let reader = BufReader::new(f);
-        posting_batch = bincode::deserialize_from(reader).unwrap();
-    } else {
-        return None;
-    }
-    // batch_range.bin
-    if let Ok(f) = File::open(path.join(PathBuf::from("batch_ranges.bin"))) {
-        let reader = BufReader::new(f);
-        batch_range = bincode::deserialize_from(reader).unwrap();
-    } else {
-        return None;
-    }
-    // term_keys.bin
-    if let Ok(f) = File::open(path.join(PathBuf::from("term_index.bin"))) {
-        let reader = BufReader::new(f);
-        term_idx = bincode::deserialize_from(reader).unwrap();
-    } else {
-        return None;
-    }
-
-    let schema = Schema::new(
-        term_idx.keys().chain([&"__id__".to_string()].into_iter()).map(|v| Field::new(v.to_string(), DataType::Boolean, false)).collect()
-    );
-    let partition_batch = posting_batch
-        .into_iter()
-        .enumerate()
-        .map(|(i, b)| Arc::new(
-            b.build_with_idx(&mut term_idx, i).unwrap()
-        ))
-        .collect();
-
-    let mut keys = Vec::new();
-    let mut values = Vec::new();
-
-    term_idx
-        .into_iter()
-        .for_each(|m| {
-            keys.push(m.0); 
-            values.push(m.1.build());
-        });
-
-    let term_idx = Arc::new(TermIdx::new(keys, values, 20));
-
-    Some(PostingTable::new(
-        Arc::new(schema),
-        term_idx,
-        partition_batch,
-        &batch_range,
-    ))
-}
