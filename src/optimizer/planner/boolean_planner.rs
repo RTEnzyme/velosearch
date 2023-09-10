@@ -132,7 +132,7 @@ impl BooleanPhysicalPlanner {
                     debug!("Create boolean predicate");
                     let runtime_expr: Arc<dyn PhysicalExpr> = if let Some(ref predicate) = boolean.predicate {
                         let schema = boolean.input.schema();
-                        let inputs: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+                        let inputs: Vec<&str> = schema.fields().iter().filter(|f| !f.name().starts_with("__NULL__")).map(|f| f.name().as_str()).collect();
                         let (term2idx,
                             (term_metas,
                             term2sel)): (HashMap<&str, usize>, (Vec<Option<TermMeta>>, HashMap<&str, f64>)) = inputs
@@ -141,9 +141,13 @@ impl BooleanPhysicalPlanner {
                             .filter(|(_, s)| *s != "__id__")
                             .map(|(i, s)| {
                                 let term_meta = posting.term_meta_of(s);
-                                debug!("{s} term_meta true count: {:?}", term_meta.as_ref().map(|v| v.distribution[0].true_count()));
-                                let sel = term_meta.as_ref().map(|v| v.selectivity).unwrap_or(1.);
-                                ((s, i), (term_meta, (s, sel)))
+                                if let Some(term_meta) = term_meta {
+                                    debug!("{s} term_meta true count: {:?}", term_meta.distribution[0].true_count());
+                                    let sel = term_meta.selectivity;
+                                    ((s, i), (Some(term_meta), (s, sel)))
+                                } else {
+                                    ((s, i), (None, (s, 0.)))
+                                }
                             })
                             .unzip();
                         posting.projected_term_meta = term_metas;
@@ -427,11 +431,11 @@ impl<'a> PhysicalPredicateBuilder<'a> {
         }
     }
 
-    fn build(self) -> Result<PhysicalPredicate> {
-        Ok(self.convert_physical(self.root)?.sub_predicate)
+    fn build(self) -> Result<Option<PhysicalPredicate>> {
+        Ok(self.convert_physical(self.root)?.map(|v| v.sub_predicate))
     }
 
-    fn convert_physical(&self, predicate: &Predicate) -> Result<SubPredicate> {
+    fn convert_physical(&self, predicate: &Predicate) -> Result<Option<SubPredicate>> {
         match predicate {
             Predicate::And { args } => {
                 let mut nodes = vec![];
@@ -439,11 +443,14 @@ impl<'a> PhysicalPredicateBuilder<'a> {
                 let mut node_num = 0;
                 let mut leaf_num = 0;
                 for arg in args {
-                    let sub_predicate = self.convert_physical(&arg.0)?;
-                    node_num += sub_predicate.node_num();
-                    leaf_num += sub_predicate.leaf_num();
-                    sel *= sub_predicate.sel();
-                    nodes.push(sub_predicate);
+                    if let Some(sub_predicate) = self.convert_physical(&arg.0)? {
+                        node_num += sub_predicate.node_num();
+                        leaf_num += sub_predicate.leaf_num();
+                        sel *= sub_predicate.sel();
+                        nodes.push(sub_predicate);
+                    } else {
+                        return Ok(None);
+                    }
                 }
                 let rank = (sel - 1.) / leaf_num as f64;
                 nodes.sort_by(|l, r| l.rank().partial_cmp(&r.rank()).unwrap());
@@ -453,14 +460,14 @@ impl<'a> PhysicalPredicateBuilder<'a> {
                     cs *= node.sel();
                 }
                 let physical_predicate = PhysicalPredicate::And { args: nodes };
-                Ok(SubPredicate::new(
+                Ok(Some(SubPredicate::new(
                     physical_predicate,
                     node_num,
                     leaf_num,
                     sel,
                     rank,
                     1.,
-                ))
+                )))
             }
             Predicate::Or { args } => {
                 let mut nodes = vec![];
@@ -468,28 +475,35 @@ impl<'a> PhysicalPredicateBuilder<'a> {
                 let mut node_num = 0;
                 let mut leaf_num = 0;
                 for arg in args {
-                    let sub_predicate = self.convert_physical(&arg.0)?;
-                    node_num += sub_predicate.node_num();
-                    leaf_num += sub_predicate.leaf_num();
-                    sel += sub_predicate.sel() * (1. - sel);
-                    nodes.push(sub_predicate);
+                    if let Some(sub_predicate) = self.convert_physical(&arg.0)? {
+                        node_num += sub_predicate.node_num();
+                        leaf_num += sub_predicate.leaf_num();
+                        sel += sub_predicate.sel() * (1. - sel);
+                        nodes.push(sub_predicate);
+                    }
                 }
                 let physical_predicate = PhysicalPredicate::Or { args: nodes };
                 let rank = (sel - 1.) / leaf_num as f64;
-                Ok(SubPredicate::new(
+                Ok(Some(SubPredicate::new(
                     physical_predicate,
                     node_num + 1,
                     leaf_num,
                     sel,
                     rank,
                     1.,
-                ))
+                )))
             }
             Predicate::Other { expr } => {
                 let expr_name = expr.display_name()?;
-                let sel = self.term2sel[expr_name.as_str()];
-                let predicate = PhysicalPredicate::Leaf { primitive: Primitives::ColumnPrimitive(Column::new(expr_name.as_str(), *self.term2idx.get(expr_name.as_str()).unwrap())) };
-                Ok(SubPredicate::new(predicate, 1, 1, sel, sel - 1., 1.))
+                let sel = self.term2sel.get(expr_name.as_str()).cloned().unwrap_or(0.);
+                if let Some(index) = self.term2idx.get(expr_name.as_str()).cloned() {
+                    let predicate = PhysicalPredicate::Leaf { primitive: Primitives::ColumnPrimitive(Column::new(expr_name.as_str(), index)) };
+                    Ok(Some(
+                        SubPredicate::new(predicate, 1, 1, sel, sel - 1., 1.)
+                    ))
+                } else {
+                    Ok(None)
+                }
             }
         }
     }

@@ -31,9 +31,13 @@ impl PhysicalOptimizerRule for PrimitivesCombination {
             let boolean_eval = boolean_eval.as_any().downcast_ref::<BooleanEvalExpr>();
             match boolean_eval {
                 Some(p) => {
-                    let predicate = p.predicate.as_ref().get();
-                    optimize_predicate_inner(unsafe{predicate.as_mut()}.unwrap());
-                    Ok(plan)
+                    if let Some(ref predicate) = p.predicate {
+                        let predicate = predicate.get();
+                        optimize_predicate_inner(unsafe{predicate.as_mut()}.unwrap());
+                        Ok(plan)
+                    } else {
+                        Ok(plan)
+                    }
                 }
                 None => Ok(plan)
             }

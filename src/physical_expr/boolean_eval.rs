@@ -1,6 +1,6 @@
 use std::{sync::Arc, any::Any, cell::SyncUnsafeCell};
 
-use datafusion::{physical_plan::{expressions::{BinaryExpr, Column}, PhysicalExpr, ColumnarValue}, arrow::{datatypes::{Schema, DataType}, record_batch::RecordBatch}, error::DataFusionError, common::Result};
+use datafusion::{physical_plan::{expressions::{BinaryExpr, Column}, PhysicalExpr, ColumnarValue}, arrow::{datatypes::{Schema, DataType}, record_batch::RecordBatch, array::BooleanArray}, error::DataFusionError, common::Result};
 use tracing::debug;
 
 use crate::ShortCircuit;
@@ -168,20 +168,33 @@ impl PhysicalPredicate {
 /// Combined Primitives Expression
 #[derive(Debug, Clone)]
 pub struct BooleanEvalExpr {
-    pub predicate: Arc<SyncUnsafeCell<PhysicalPredicate>>,
+    pub predicate: Option<Arc<SyncUnsafeCell<PhysicalPredicate>>>,
 }
 
 impl BooleanEvalExpr {
-    pub fn new(predicate: PhysicalPredicate) -> Self {
-        Self {
-            predicate: Arc::new(SyncUnsafeCell::new(predicate)),
+    pub fn new(predicate: Option<PhysicalPredicate>) -> Self {
+        match predicate {
+            Some(p) => {
+                Self {
+                    predicate: Some(Arc::new(SyncUnsafeCell::new(p))),
+                }
+            }
+            None => {
+                Self {
+                    predicate: None,
+                }
+            }
         }
     }
 }
 
 impl std::fmt::Display for BooleanEvalExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", unsafe{ &*(self.predicate.as_ref().get()) as &PhysicalPredicate })
+        if let Some(ref predicate) = self.predicate {
+            write!(f, "{:?}", unsafe{ &*(predicate.as_ref().get()) as &PhysicalPredicate })
+        } else {
+            write!(f, "None")
+        }
     }
 }
 
@@ -199,23 +212,29 @@ impl PhysicalExpr for BooleanEvalExpr {
     }
     
     fn evaluate(&self, batch: &RecordBatch) -> datafusion::common::Result<ColumnarValue> {
-        let batch_len = (batch.num_rows() + 7) / 8;
-        let predicate = self.predicate.as_ref().get();
-        let predicate_ref = unsafe {predicate.as_ref().unwrap() };
-        match predicate_ref {
-            PhysicalPredicate::And { .. } => {
-                let res = predicate_ref.eval(batch, vec![u8::MAX; batch_len], true)?;
-                let array = Arc::new(build_boolean_array(res, batch.num_rows()));
-                Ok(ColumnarValue::Array(array))
+        if let Some(ref predicate) = self.predicate {
+            let batch_len = (batch.num_rows() + 7) / 8;
+            let predicate = predicate.as_ref().get();
+            let predicate_ref = unsafe {predicate.as_ref().unwrap() };
+            match predicate_ref {
+                PhysicalPredicate::And { .. } => {
+                    let res = predicate_ref.eval(batch, vec![u8::MAX; batch_len], true)?;
+                    let array = Arc::new(build_boolean_array(res, batch.num_rows()));
+                    Ok(ColumnarValue::Array(array))
+                }
+                PhysicalPredicate::Or { .. } => {
+                    let res = predicate_ref.eval(batch, vec![0; batch_len], false)?;
+                    let array = Arc::new(build_boolean_array(res, batch.num_rows()));
+                    Ok(ColumnarValue::Array(array))
+                }
+                PhysicalPredicate::Leaf { primitive } => {
+                    primitive.evaluate(batch)
+                }
             }
-            PhysicalPredicate::Or { .. } => {
-                let res = predicate_ref.eval(batch, vec![0; batch_len], false)?;
-                let array = Arc::new(build_boolean_array(res, batch.num_rows()));
-                Ok(ColumnarValue::Array(array))
-            }
-            PhysicalPredicate::Leaf { primitive } => {
-                primitive.evaluate(batch)
-            }
+        } else {
+            let batch_len = (batch.num_rows() + 7) / 8;
+            let res: Vec<u8> = vec![0; batch_len];
+            Ok(ColumnarValue::Array(Arc::new(build_boolean_array(res, batch_len * 8))))
         }
     }
 
@@ -311,7 +330,7 @@ mod tests {
                 sub_predicate2,
             ]
         };
-        let res = BooleanEvalExpr::new(physical_predicate).evaluate(&batch).unwrap().into_array(0);
+        let res = BooleanEvalExpr::new(Some(physical_predicate)).evaluate(&batch).unwrap().into_array(0);
         let res = unsafe { res.data().buffers()[0].align_to::<u8>().1 };
         println!("left: {:b}, right: {:b}", res[0], expect[0]);
         assert_eq!(res, &expect);
