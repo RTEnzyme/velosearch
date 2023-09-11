@@ -296,7 +296,7 @@ impl Index<&str> for PostingBatch {
 #[derive(Serialize, Deserialize)]
 pub struct PostingBatchBuilder {
     current: u32,
-    term_dict: RefCell<HashMap<String, Vec<(u32, u8)>>>,
+    term_dict: RefCell<BTreeMap<String, Vec<(u32, u8)>>>,
     term_num: usize,
 }
 
@@ -304,7 +304,7 @@ impl PostingBatchBuilder {
     pub fn new() -> Self {
         Self { 
             current: 0,
-            term_dict: RefCell::new(HashMap::new()),
+            term_dict: RefCell::new(BTreeMap::new()),
             term_num: 0,
         }
     }
@@ -327,6 +327,76 @@ impl PostingBatchBuilder {
         self.current = doc_id;
         self.term_num += 1;
         Ok(())
+    }
+
+    pub fn build(self) -> Result<PostingBatch> {
+        let term_dict = self.term_dict
+            .into_inner();
+        let mut schema_list = Vec::new();
+        let mut postings: Vec<Arc<GenericBinaryArray<i32>>> = Vec::new();
+        let mut freqs = Vec::new();
+        let mut boundarys = Vec::new();
+        term_dict
+            .into_iter()
+            .for_each(|(k, v)| {
+                let mut boundary = vec![0];
+                let mut cnter = 0;
+                let mut posting_builder = GenericBinaryBuilder::new();
+                let mut builder_len = 0;
+                let mut batch_num = 0;
+
+                let mut freq: Vec<Option<Vec<Option<u8>>>> = vec![None; 4];
+                let mut buffer: Vec<u16> = Vec::new();
+                v.into_iter()
+                .for_each(|(p, f)| {
+                    if p - cnter < 512 {
+                        buffer.push((p - cnter) as u16);
+                    } else {
+                        let skip_num = (p - cnter) / 512;
+                        cnter += skip_num * 512;
+                        batch_num += skip_num;
+                        if batch_num % 64 == 0 {
+                            boundary.push(builder_len);
+                        }
+                        
+                        if buffer.len() > 16 {
+                            let mut bitmap = vec![0; 64];
+                            for i in &buffer {
+                                let off = *i;
+                                bitmap[(off >> 3) as usize] |= 1 << (off % (1 << 3));
+                            }
+                            posting_builder.append_value(bitmap);
+                        } else {
+                            posting_builder.append_value(unsafe {buffer.as_slice().align_to::<u8>().1 });
+                        }
+                        builder_len += 1;
+                        buffer.clear();
+                    }
+
+                    let idx=  f / 64 % 8;
+                    match freq[idx as usize] {
+                        Some(ref mut v) => {
+                            v.push(Some(f));
+                        }
+                        None => {
+                            freq[idx as usize] = Some(vec![Some(f)]);
+                        }
+                    }
+                });
+                freqs.push(Arc::new(GenericListArray::<i32>::from_iter_primitive::<UInt8Type, _, _>(freq)));
+                schema_list.push(Field::new(k.clone(), DataType::UInt32, false));
+                postings.push(Arc::new(posting_builder.finish()));
+                boundarys.push(boundary);
+            });
+        schema_list.push(Field::new("__id__", DataType::UInt32, false));
+        postings.push(Arc::new(GenericBinaryArray::<i32>::from(vec![] as Vec<&[u8]>)));
+        PostingBatch::try_new_with_freqs(
+            Arc::new(Schema::new(schema_list)),
+            postings,
+            freqs,
+            boundarys,
+            Arc::new(BatchRange::new(0, 512))
+        )
     }
 
     pub fn build_with_idx(self, idx: &mut BTreeMap<String, TermMetaBuilder>, partition_num: usize) -> Result<PostingBatch> {

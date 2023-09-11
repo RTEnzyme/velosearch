@@ -1070,6 +1070,7 @@ dependencies = [
  "num_cpus",
  "object_store",
  "parquet",
+ "serde",
  "sqlparser",
 ]
 

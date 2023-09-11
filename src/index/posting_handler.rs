@@ -8,7 +8,7 @@ use tantivy::tokenizer::{TextAnalyzer, SimpleTokenizer, RemoveLongFilter, LowerC
 use tokio::time::Instant;
 use tracing::{info, span, Level, debug};
 
-use crate::{utils::{json::{parse_wiki_dir, WikiItem}, builder::deserialize_posting_table}, Result, batch::{PostingBatchBuilder, BatchRange, TermMetaBuilder}, datasources::posting_table::PostingTable, BooleanContext, query::boolean_query::BooleanPredicateBuilder, jit::AOT_PRIMITIVES};
+use crate::{utils::{json::{parse_wiki_dir, WikiItem}, builder::{deserialize_posting_table, serialize_term_meta}}, Result, batch::{PostingBatchBuilder, BatchRange, TermMetaBuilder}, datasources::posting_table::PostingTable, BooleanContext, query::boolean_query::BooleanPredicateBuilder, jit::AOT_PRIMITIVES};
 
 use super::HandlerT;
 
@@ -198,18 +198,14 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
         let f = File::create(path.join(PathBuf::from("posting_batch.bin"))).unwrap();
         let writer = BufWriter::new(f);
         bincode::serialize_into(writer, &partition_batch).unwrap();
-
-        let f = File::create(path.join(PathBuf::from("term_index.bin"))).unwrap();
-        let writer = BufWriter::new(f);
-        bincode::serialize_into(writer, &term_idx).unwrap();
     }
 
     let partition_batch = partition_batch
         .into_iter()
         .enumerate()
-        .map(|(n, b )| Arc::new(
-            b.build_with_idx(&mut term_idx, n).unwrap() 
-        ))
+        .map(|(n, b )| {
+            Arc::new(b.build_with_idx(&mut term_idx, n).unwrap())
+        })
         .collect();
 
     let mut keys = Vec::new();
@@ -243,6 +239,12 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
         let f = File::create(path.join(PathBuf::from("batch_ranges.bin"))).unwrap();
         let writer = BufWriter::new(f);
         bincode::serialize_into(writer, &BatchRange::new(0, (num_512_partition * batch_size) as u32)).unwrap();
+
+        let f = File::create(path.join(PathBuf::from("term_keys.bin"))).unwrap();
+        let writer = BufWriter::new(f);
+        bincode::serialize_into(writer, &keys).unwrap();
+
+        serialize_term_meta(&values, p.to_string());
     }
     #[cfg(feature = "hash_idx")]
     let term_idx = Arc::new(TermIdx { term_map: map });
