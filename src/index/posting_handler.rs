@@ -1,7 +1,7 @@
 use std::{collections::{HashSet, BTreeMap, HashMap}, sync::Arc, fs::File, io::BufWriter, path::PathBuf};
 
 use async_trait::async_trait;
-use datafusion::{sql::TableReference, arrow::datatypes::{Schema, DataType, Field}, datasource::provider_as_source};
+use datafusion::{sql::TableReference, arrow::datatypes::{Schema, DataType, Field}, datasource::provider_as_source, common::cast::as_int64_array};
 use adaptive_hybrid_trie::TermIdx;
 use rand::{thread_rng, seq::IteratorRandom};
 use tantivy::tokenizer::{TextAnalyzer, SimpleTokenizer, RemoveLongFilter, LowerCaser, Stemmer};
@@ -108,7 +108,7 @@ impl HandlerT for PostingHandler {
             // handlers.push(tokio::spawn(async move {
                 debug!("start construct query");
             let mut time_distri = Vec::new();
-            let round = 1;
+            let round = 15;
             let provider = ctx.index_provider("__table__").await?;
             let schema = &provider.schema();
             let table_source = provider_as_source(Arc::clone(&provider));
@@ -120,7 +120,7 @@ impl HandlerT for PostingHandler {
                 // let predicate = BooleanPredicateBuilder::must(&["hot", "spring", "south", "dakota"]).unwrap();
                 // let predicate = BooleanPredicateBuilder::must(&["civil", "war", "battlefield"]).unwrap();
                 let timer = Instant::now();
-                let predicate = BooleanPredicateBuilder::must(&["david", "lee", "roth"]).unwrap();
+                let predicate = BooleanPredicateBuilder::must(&["the", "book", "of", "life"]).unwrap();
                 // let predicate = BooleanPredicateBuilder::should(&["and", "the"]).unwrap();
                 // let predicate = predicate.with_must(predicate1).unwrap();
                 let predicate = predicate.build();
@@ -129,9 +129,10 @@ impl HandlerT for PostingHandler {
                 let res = index
                     // .explain(false, true).unwrap()
                     // .show().await.unwrap();
+                    .count_agg().unwrap()
                     .collect().await.unwrap();
-                info!("res: {:?}", res);
                 let time = timer.elapsed().as_micros();
+                info!("res: {:?}", as_int64_array(res[0].column(0)).unwrap().value(0));
                 time_distri.push(time);
                 time_sum += time;
             }

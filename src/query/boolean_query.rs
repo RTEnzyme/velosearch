@@ -1,12 +1,12 @@
-use std::sync::Arc;
+use std::{sync::Arc, collections::HashMap};
 
 use datafusion::{
-    prelude::{col, Expr, boolean_or, boolean_and, create_udaf}, 
-    logical_expr::{LogicalPlan, LogicalPlanBuilder, Projection, Volatility}, 
+    prelude::{col, Expr, boolean_or, boolean_and, create_udaf, Column}, 
+    logical_expr::{LogicalPlan, LogicalPlanBuilder, Projection, Volatility, Aggregate}, 
     execution::context::{SessionState, TaskContext}, 
     error::DataFusionError, 
     physical_plan::{ExecutionPlan, collect}, 
-    arrow::{record_batch::RecordBatch, util::pretty, datatypes::DataType}, common::{DFSchema, DFSchemaRef}
+    arrow::{record_batch::RecordBatch, util::pretty, datatypes::DataType}, common::{DFSchema, DFSchemaRef, DFField}
 };
 use tokio::time::Instant;
 use tracing::{debug, info};
@@ -134,12 +134,16 @@ impl BooleanQuery {
             Arc::new(DataType::Int64),
             Volatility::Immutable,
             Arc::new(|_| Ok(Box::new(CountValid::new()))),
-            Arc::new(vec![DataType::Boolean, DataType::Int64]),
+            Arc::new(vec![DataType::Int64]),
         );
-        let plan = LogicalPlanBuilder::from(self.plan)
-            .aggregate(vec![] as Vec<Expr>, vec![count_valid.call(vec![col("mask")])])?.build()?;
+        let aggregate = Aggregate::try_new_with_schema(
+                Arc::new(self.plan),
+                vec![],
+                vec![count_valid.call(vec![Expr::Column(Column::new(Some(format!("__table__")), "mask"))])],
+                Arc::new(DFSchema::new_with_metadata(vec![DFField::new(Some("__table__"), "mask", DataType::Boolean, false)], HashMap::new())?),
+            )?;
         Ok(Self {
-            plan,
+            plan: LogicalPlan::Aggregate(aggregate),
             session_state: self.session_state,
         })
     }

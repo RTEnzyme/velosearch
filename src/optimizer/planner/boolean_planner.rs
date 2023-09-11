@@ -5,17 +5,17 @@ use datafusion::{
     physical_plan::{
         PhysicalPlanner, ExecutionPlan, PhysicalExpr, 
         expressions::{Column, Literal, binary, self}, 
-        explain::ExplainExec, projection::ProjectionExec, boolean::BooleanExec, displayable, analyze::AnalyzeExec}, 
+        explain::ExplainExec, projection::ProjectionExec, boolean::BooleanExec, displayable, analyze::AnalyzeExec, AggregateExpr, aggregates::{self, PhysicalGroupBy, AggregateExec, AggregateMode}, udaf}, 
         execution::context::SessionState, error::{Result, DataFusionError}, 
         logical_expr::{
-            LogicalPlan, expr::BooleanQuery, BinaryExpr, PlanType, ToStringifiedPlan, Projection, TableScan, StringifiedPlan, Operator, logical_plan::Predicate
+            LogicalPlan, expr::{BooleanQuery, AggregateFunction}, BinaryExpr, PlanType, ToStringifiedPlan, Projection, TableScan, StringifiedPlan, Operator, logical_plan::Predicate, Aggregate 
         },
         common::{DFSchema, TermMeta}, arrow::datatypes::{Schema, SchemaRef}, 
         prelude::Expr, physical_expr::execution_props::ExecutionProps, datasource::source_as_provider, 
         physical_optimizer::PhysicalOptimizerRule
     };
 use futures::{future::BoxFuture, FutureExt};
-use tracing::{debug, trace};
+use tracing::{debug, trace, info};
 
 use crate::{physical_expr::{boolean_eval::{PhysicalPredicate, Primitives, SubPredicate}, BooleanEvalExpr}, datasources::posting_table::PostingExec};
 
@@ -142,6 +142,7 @@ impl BooleanPhysicalPlanner {
                             .map(|(i, s)| {
                                 let term_meta = posting.term_meta_of(s);
                                 if let Some(term_meta) = term_meta {
+                                    debug!("{s} term_meta nums: {:?}", term_meta.nums[0]);
                                     debug!("{s} term_meta true count: {:?}", term_meta.distribution[0].true_count());
                                     let sel = term_meta.selectivity;
                                     ((s, i), (Some(term_meta), (s, sel)))
@@ -171,6 +172,45 @@ impl BooleanPhysicalPlanner {
                     let input = self.create_boolean_plan(&a.input, session_state).await?;
                     let schema = SchemaRef::new((*a.schema).clone().into());
                     Ok(Arc::new(AnalyzeExec::new(a.verbose, input, schema)))
+                }
+                LogicalPlan::Aggregate(Aggregate {
+                    input,
+                    aggr_expr,
+                    ..
+                }) => {
+                    // Initially need to perform the aggregate and merge the partitions
+                    let input_exec = self.create_boolean_plan(input, session_state).await?;
+                    let physical_input_schema = input_exec.schema();
+                    let logical_input_schema = input.as_ref().schema();
+
+                    let groups = PhysicalGroupBy::new_single(vec![]);
+                    let aggregates = aggr_expr
+                        .iter()
+                        .map(|e| {
+                            create_aggregate_expr(
+                                e, 
+                                logical_input_schema,
+                                &physical_input_schema,
+                                session_state.execution_props()
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+
+                    let  initial_aggr = Arc::new(AggregateExec::try_new(
+                        AggregateMode::Partial,
+                        groups.clone(),
+                        aggregates.clone(),
+                        input_exec,
+                        physical_input_schema.clone(),
+                    )?);
+
+                    Ok(Arc::new(AggregateExec::try_new(
+                        AggregateMode::Final,
+                        groups.clone(),
+                        aggregates,
+                        initial_aggr,
+                        physical_input_schema.clone(),
+                    )?))
                 }
                 _ => unreachable!("Don't support LogicalPlan {:?} in BooleanPlanner", logical_plan),
             };
@@ -323,8 +363,12 @@ fn create_physical_expr(
             execution_props,
         )?),
         Expr::Column(c) => {
-            let idx = input_schema.index_of(&c.name)?;
-            Ok(Arc::new(Column::new(&c.name, idx)))
+            if &c.name == "mask" {
+                Ok(Arc::new(Column::new(&c.name, 0)))
+            } else {
+                let idx = input_schema.index_of(&c.name)?;
+                Ok(Arc::new(Column::new(&c.name, idx)))
+            }
         }
         Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
         Expr::BinaryExpr(BinaryExpr { left, op, right}) => {
@@ -400,6 +444,18 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::Not(expr) => {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("NOT {expr}"))
+        }
+        Expr::AggregateUDF { fun, args, filter } => {
+            if filter.is_some() {
+                return Err(DataFusionError::Execution(
+                    "aggregate expression with filter is not supported".to_string(),
+                ));
+            }
+            let mut names = Vec::with_capacity(args.len());
+            for e in args {
+                names.push(create_physical_name(e, false)?);
+            }
+            Ok(format!("{}({})", fun.name, names.join(",")))
         }
         e => Err(DataFusionError::Internal(
             format!("Create physical name does not support {}", e)
@@ -508,6 +564,84 @@ impl<'a> PhysicalPredicateBuilder<'a> {
         }
     }
 }
+
+/// Create an aggregate expression from a logical expression or an alias
+pub fn create_aggregate_expr(
+    e: &Expr,
+    logical_input_schema: &DFSchema,
+    physical_input_schema: &Schema,
+    execution_props: &ExecutionProps,
+) -> Result<Arc<dyn AggregateExpr>> {
+    // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
+    let (name, e) = match e {
+        Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
+        _ => (physical_name(e)?, e),
+    };
+
+    create_aggregate_expr_with_name(
+        e,
+        name,
+        logical_input_schema,
+        physical_input_schema,
+        execution_props,
+    )
+}
+
+/// Create an aggregate expression with a name from a logical expression
+pub fn create_aggregate_expr_with_name(
+    e: &Expr,
+    name: impl Into<String>,
+    logical_input_schema: &DFSchema,
+    physical_input_schema: &Schema,
+    execution_props: &ExecutionProps,
+) -> Result<Arc<dyn AggregateExpr>> {
+    match e {
+        Expr::AggregateFunction(AggregateFunction {
+            fun,
+            distinct,
+            args,
+            ..
+        }) => {
+            let args = args
+                .iter()
+                .map(|e| {
+                    create_physical_expr(
+                        e,
+                        logical_input_schema,
+                        physical_input_schema,
+                        execution_props,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            aggregates::create_aggregate_expr(
+                fun,
+                *distinct,
+                &args,
+                physical_input_schema,
+                name,
+            )
+        }
+        Expr::AggregateUDF { fun, args, .. } => {
+            let args = args
+                .iter()
+                .map(|e| {
+                    create_physical_expr(
+                        e,
+                        logical_input_schema,
+                        physical_input_schema,
+                        execution_props,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            udaf::create_aggregate_expr(fun, &args, physical_input_schema, name)
+        }
+        other => Err(DataFusionError::Internal(format!(
+            "Invalid aggregate expression '{other:?}'"
+        ))),
+    }
+}
+
 
 #[cfg(test)]
 mod tests {

@@ -5,11 +5,11 @@ use datafusion::{
     arrow::{datatypes::{SchemaRef, Schema, Field, DataType}, record_batch::RecordBatch, array::BooleanArray}, 
     datasource::TableProvider, 
     logical_expr::TableType, execution::context::SessionState, prelude::Expr, error::{Result, DataFusionError}, 
-    physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream, metrics::{ExecutionPlanMetricsSet, MetricsSet}}, common::TermMeta};
+    physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream, metrics::{ExecutionPlanMetricsSet, MetricsSet}}, common::{TermMeta, cast::as_boolean_array}};
 use futures::Stream;
 use adaptive_hybrid_trie::TermIdx;
 use serde::{Serialize, ser::SerializeStruct};
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::batch::{PostingBatch, BatchRange};
 
@@ -336,7 +336,6 @@ impl Stream for PostingStream {
                     .collect();
                 let batch = self.posting_lists.project_fold(&self.indices, self.schema.clone(), &distris, self.index, min_range).unwrap();
                 self.index += 1;
-                debug!("batch len: {:}", batch.num_rows());
                 return Poll::Ready(Some(Ok(batch)));
             } else {
                 unreachable!()

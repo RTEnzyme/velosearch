@@ -180,7 +180,7 @@ impl PostingBatch {
         }
         batches.insert(projected_schema.index_of("__id__").expect("Should have __id__ field"), Arc::new(UInt32Array::from_iter_values((self.range.start).. (self.range.start + 32 * self.range.nums32))));
         debug!("end of project fold");
-        let option = RecordBatchOptions::new().with_row_count(Some(64 * 512));
+        let option = RecordBatchOptions::new().with_row_count(Some(valid_batch_num * 512));
         Ok(RecordBatch::try_new_with_options(projected_schema, batches, &option)?)
     }
 
@@ -484,7 +484,7 @@ fn build_boolean_array(mut data: Vec<u64>, batch_len: usize) -> ArrayRef {
 
 fn build_boolean_array_u8(mut data: Vec<u8>, batch_len: usize) -> ArrayRef {
     let value_buffer = unsafe {
-        let buf = Buffer::from_raw_parts(NonNull::new_unchecked(data.as_mut_ptr() as *mut u8), batch_len, batch_len);
+        let buf = Buffer::from_raw_parts(NonNull::new_unchecked(data.as_mut_ptr() as *mut u8), batch_len / 8, batch_len / 8);
         std::mem::forget(data);
         buf
     };

@@ -129,7 +129,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
             debug!("End Pre_visit PostingExec");
             Ok(RewriteRecursion::Continue)
         } else {
-            Ok(RewriteRecursion::Stop)
+            Ok(RewriteRecursion::Continue)
         }
     }
 

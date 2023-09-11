@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use datafusion::{physical_optimizer::PhysicalOptimizerRule, physical_plan::{ExecutionPlan, boolean::BooleanExec}};
+use datafusion::{physical_optimizer::PhysicalOptimizerRule, physical_plan::{ExecutionPlan, boolean::BooleanExec, rewrite::TreeNodeRewritable}};
 use tracing::debug;
 
 use crate::{physical_expr::{BooleanEvalExpr, boolean_eval::{PhysicalPredicate, SubPredicate}, Primitives}, JIT_MAX_NODES, ShortCircuit};
@@ -26,24 +26,26 @@ impl PhysicalOptimizerRule for PrimitivesCombination {
         plan: Arc<dyn datafusion::physical_plan::ExecutionPlan>,
         _config: &datafusion::config::ConfigOptions,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        if let Some(boolean) = plan.as_any().downcast_ref::<BooleanExec>() {
-            let boolean_eval = boolean.predicate[&0].clone();
-            let boolean_eval = boolean_eval.as_any().downcast_ref::<BooleanEvalExpr>();
-            match boolean_eval {
-                Some(p) => {
-                    if let Some(ref predicate) = p.predicate {
-                        let predicate = predicate.get();
-                        optimize_predicate_inner(unsafe{predicate.as_mut()}.unwrap());
-                        Ok(plan)
-                    } else {
-                        Ok(plan)
+        plan.transform_down(&|plan| {
+            if let Some(boolean) = plan.as_any().downcast_ref::<BooleanExec>() {
+                let boolean_eval = boolean.predicate[&0].clone();
+                let boolean_eval = boolean_eval.as_any().downcast_ref::<BooleanEvalExpr>();
+                match boolean_eval {
+                    Some(p) => {
+                        if let Some(ref predicate) = p.predicate {
+                            let predicate = predicate.get();
+                            optimize_predicate_inner(unsafe{predicate.as_mut()}.unwrap());
+                            Ok(Some(plan))
+                        } else {
+                            Ok(Some(plan))
+                        }
                     }
+                    None => Ok(Some(plan))
                 }
-                None => Ok(plan)
+            } else {
+                Ok(None)
             }
-        } else {
-            Ok(plan)
-        }
+        })
     }
 
     fn name(&self) -> &str {

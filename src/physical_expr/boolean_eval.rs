@@ -1,6 +1,7 @@
 use std::{sync::Arc, any::Any, cell::SyncUnsafeCell};
 
 use datafusion::{physical_plan::{expressions::{BinaryExpr, Column}, PhysicalExpr, ColumnarValue}, arrow::{datatypes::{Schema, DataType}, record_batch::RecordBatch}, error::DataFusionError, common::Result};
+use tracing::{debug, info};
 
 use crate::ShortCircuit;
 use crate::utils::array::build_boolean_array;
@@ -117,15 +118,24 @@ impl PhysicalPredicate {
                             .align_to::<u8>().1
                         };
                         if is_and {
-                            Ok(init_v.into_iter()
-                            .zip(res.into_iter())
-                            .map(|(i, j)| i & j)
-                            .collect())
+                            if res.len() == 0 {
+                                init_v.fill(0);
+                                Ok(init_v)
+                            } else {
+                                Ok(init_v.into_iter()
+                                .zip(res.into_iter())
+                                .map(|(i, j)| i & j)
+                                .collect())
+                            }
                         } else {
-                            Ok(init_v.into_iter()
-                            .zip(res.into_iter())
-                            .map(|(i, j)| i | j)
-                            .collect())
+                            if res.len() == 0 {
+                                Ok(init_v)
+                            } else {
+                                Ok(init_v.into_iter()
+                                .zip(res.into_iter())
+                                .map(|(i, j)| i | j)
+                                .collect())
+                            }
                         }
                     }
                     Primitives::ShortCircuitPrimitive(s) => {
@@ -141,21 +151,34 @@ impl PhysicalPredicate {
                         }
                     }
                     Primitives::ColumnPrimitive(c) => {
-                        let eval_res = c.evaluate(batch)?.into_array(0).data().buffers()[0].to_vec();
                         if is_and {
-                            Ok(eval_res
-                                .into_iter()
-                                .zip(init_v.into_iter())
-                                .map(|(i, j)| i & j)
-                                .collect()
-                            )
+                            let eval_array = c.evaluate(batch)?.into_array(0);
+                            let eval_res = eval_array.data().buffers()[0].as_slice();
+                            if eval_res.len() == 0 {
+                                init_v.fill(0);
+                                Ok(init_v)
+                            } else {
+                                assert_eq!(init_v.len(), eval_res.len());
+                                Ok(eval_res
+                                    .into_iter()
+                                    .zip(init_v.into_iter())
+                                    .map(|(i, j)| *i & j)
+                                    .collect()
+                                )
+                            }
                         } else {
-                            Ok(eval_res
-                                .into_iter()
-                                .zip(init_v.into_iter())
-                                .map(|(i, j)| i | j)
-                                .collect()
-                            )
+                            let eval_array = c.evaluate(batch)?.into_array(0);
+                            let eval_res = eval_array.data().buffers()[0].as_slice();
+                            if eval_res.len() == 0 {
+                                Ok(init_v)
+                            } else {
+                                Ok(eval_res
+                                    .into_iter()
+                                    .zip(init_v.into_iter())
+                                    .map(|(i, j)| i | j)
+                                    .collect()
+                                )
+                            }
                         }
                     }
                 }
@@ -212,12 +235,14 @@ impl PhysicalExpr for BooleanEvalExpr {
     
     fn evaluate(&self, batch: &RecordBatch) -> datafusion::common::Result<ColumnarValue> {
         if let Some(ref predicate) = self.predicate {
+            info!("batch len: {:}", batch.num_rows());
             let batch_len = (batch.num_rows() + 7) / 8;
             let predicate = predicate.as_ref().get();
             let predicate_ref = unsafe {predicate.as_ref().unwrap() };
             match predicate_ref {
                 PhysicalPredicate::And { .. } => {
                     let res = predicate_ref.eval(batch, vec![u8::MAX; batch_len], true)?;
+                    debug!("res len: {:}", res.len());
                     let array = Arc::new(build_boolean_array(res, batch.num_rows()));
                     Ok(ColumnarValue::Array(array))
                 }

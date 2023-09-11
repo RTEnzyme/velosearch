@@ -1,6 +1,7 @@
 use std::arch::x86_64::{_mm512_setzero_si512, _mm512_loadu_si512, _mm512_popcnt_epi64, _mm512_add_epi64, _mm512_reduce_add_epi64};
 
-use datafusion::{physical_plan::Accumulator, error::Result, scalar::ScalarValue, arrow::{array::{ArrayRef, Int64Array}, compute::sum}, common::{downcast_value, DataFusionError}};
+use datafusion::{physical_plan::Accumulator, error::Result, scalar::ScalarValue, arrow::{array::{ArrayRef, Int64Array, as_boolean_array}, compute::sum}, common::{downcast_value, DataFusionError}};
+use tracing::{debug, info};
 
 
 /// Count
@@ -23,7 +24,10 @@ impl Accumulator for CountValid {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = &values[0];
-        self.count += avx512_vpopcnt(array.data().buffers()[0].as_slice()) as i64;
+        // let count = avx512_vpopcnt(array.data().buffers()[0].as_slice()) as i64;
+        let count = as_boolean_array(&array).true_count() as i64;
+        debug!("update count: {:?}", count);
+        self.count += count;
         Ok(())
     }
 
@@ -34,6 +38,7 @@ impl Accumulator for CountValid {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        debug!("merge_batch: {:?}", states);
         let counts = downcast_value!(states[0], Int64Array);
         let delta = &sum(counts);
         if let Some(d) = delta {
