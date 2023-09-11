@@ -2,10 +2,10 @@ use std::{any::Any, sync::Arc, task::Poll, mem::size_of_val};
 
 use async_trait::async_trait;
 use datafusion::{
-    arrow::{datatypes::{SchemaRef, Schema, Field, DataType}, record_batch::RecordBatch, array::BooleanArray}, 
+    arrow::{datatypes::{SchemaRef, Schema, Field, DataType}, record_batch::RecordBatch, array::{BooleanArray, as_boolean_array}, compute::and}, 
     datasource::TableProvider, 
     logical_expr::TableType, execution::context::SessionState, prelude::Expr, error::{Result, DataFusionError}, 
-    physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream, metrics::{ExecutionPlanMetricsSet, MetricsSet}}, common::{TermMeta, cast::as_boolean_array}};
+    physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream, metrics::{ExecutionPlanMetricsSet, MetricsSet}}, common::TermMeta};
 use futures::Stream;
 use adaptive_hybrid_trie::TermIdx;
 use serde::{Serialize, ser::SerializeStruct};
@@ -336,6 +336,12 @@ impl Stream for PostingStream {
                     .collect();
                 let batch = self.posting_lists.project_fold(&self.indices, self.schema.clone(), &distris, self.index, min_range).unwrap();
                 self.index += 1;
+
+                let res = batch.columns()[..batch.num_columns() - 1]
+                    .iter()
+                    .map(|a| as_boolean_array(a))
+                    .cloned()
+                    .reduce(|a, b| and(&a, &b).unwrap());
                 return Poll::Ready(Some(Ok(batch)));
             } else {
                 unreachable!()

@@ -2,7 +2,7 @@ use std::{sync::Arc, ops::Index, collections::{HashMap, BTreeMap}, mem::size_of_
 
 use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray, GenericBinaryArray, GenericBinaryBuilder}, record_batch::{RecordBatch, RecordBatchOptions}, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
 use serde::{Serialize, Deserialize};
-use tracing::debug;
+use tracing::{debug, info};
 use crate::utils::{Result, FastErr};
 
 
@@ -111,6 +111,7 @@ impl PostingBatch {
         const CHUNK_SIZE: usize = 64;
         let valid_batch_num = min_range.count_ones() as usize;
         let mut batches: Vec<ArrayRef> = Vec::with_capacity(indices.len());
+        assert_eq!(indices.len(), distris.len());
         for (idx, distri) in indices.into_iter().zip(distris.into_iter()) {
             // To be optimized, we can convert bitvec to BooleanArray
             if idx.is_none() {
@@ -135,11 +136,12 @@ impl PostingBatch {
             };
 
             let boundary = &self.boundary[idx];
+            let start_idx = boundary[boundary_idx] as usize;
 
             let boundary_len = if boundary_idx < boundary.len() - 1 {
-                (boundary[boundary_idx + 1] - boundary[boundary_idx] + 1) as usize
+                (boundary[boundary_idx + 1] - boundary[boundary_idx]) as usize
             } else if  boundary_idx == boundary.len() - 1 {
-                posting.len() - boundary[boundary_idx] as usize - 1
+                posting.len() - boundary[boundary_idx] as usize
             } else {
                 batches.push(Arc::new(BooleanArray::from(vec![] as Vec<bool>)));
                 continue;
@@ -156,23 +158,22 @@ impl PostingBatch {
                 if valid_mask & 1 << i == 0 {
                     continue
                 }
-                let batch = posting.value(cnt);
+                let batch = posting.value(start_idx + cnt);
 
-
-                if batch.len() >= 16 {
+                if batch.len() > 32 {
                     valid_batch[write_pos] = unsafe {*(batch.as_ptr() as *const [u8; 64])};
                 } else {
                     // means this's Integer list
-                    let batch = unsafe {posting.value(cnt).align_to::<u16>().1 };
+                    let batch = unsafe {batch.align_to::<u16>().1 };
                     //  means this's bitmap
                     let mut bitmap = [0; CHUNK_SIZE];
                     for off in batch {
-                        bitmap[(*off >> 8) as usize] |= 1 << (*off % (1 << 8));
+                        bitmap[(*off >> 3) as usize] |= 1 << (*off % (1 << 3));
                     }
                     valid_batch[write_pos] = bitmap;
                 }
                 cnt += 1;
-                write_pos = write_mask.trailing_ones() as usize;
+                write_pos = write_mask.trailing_zeros() as usize;
                 write_mask = clear_lowest_set_bit(write_mask);
             }
             let batch = build_boolean_array_u8(valid_batch.into_flattened(), 512 * valid_batch_num);
@@ -353,7 +354,7 @@ impl PostingBatchBuilder {
                     if p - cnter < 512 {
                         buffer.push((p - cnter) as u16);
                     } else {
-                        let skip_num = (p - cnter + 1) / 512;
+                        let skip_num = (p - cnter) / 512;
                         cnter += skip_num * 512;
                         batch_num += skip_num;
                         if batch_num % 64 == 0 {
@@ -364,7 +365,7 @@ impl PostingBatchBuilder {
                             let mut bitmap = vec![0; 64];
                             for i in &buffer {
                                 let off = *i;
-                                bitmap[(off >> 3) as usize] |= 1 << (off % (1 << 8));
+                                bitmap[(off >> 3) as usize] |= 1 << (off % (1 << 3));
                             }
                             posting_builder.append_value(bitmap);
                         } else {
@@ -478,7 +479,7 @@ fn build_boolean_array(mut data: Vec<u64>, batch_len: usize) -> ArrayRef {
         .len(batch_len)
         .add_buffer(value_buffer);
 
-    let array_data = unsafe { builder.build_unchecked() };
+    let array_data = builder.build().unwrap();
     Arc::new(BooleanArray::from(array_data))
 }
 
@@ -492,7 +493,7 @@ fn build_boolean_array_u8(mut data: Vec<u8>, batch_len: usize) -> ArrayRef {
         .len(batch_len)
         .add_buffer(value_buffer);
 
-    let array_data = unsafe { builder.build_unchecked() };
+    let array_data = builder.build().unwrap();
     Arc::new(BooleanArray::from(array_data))
 }
 

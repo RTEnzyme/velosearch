@@ -1,6 +1,6 @@
 use std::{sync::Arc, any::Any, cell::SyncUnsafeCell};
 
-use datafusion::{physical_plan::{expressions::{BinaryExpr, Column}, PhysicalExpr, ColumnarValue}, arrow::{datatypes::{Schema, DataType}, record_batch::RecordBatch}, error::DataFusionError, common::Result};
+use datafusion::{physical_plan::{expressions::{BinaryExpr, Column}, PhysicalExpr, ColumnarValue}, arrow::{datatypes::{Schema, DataType}, record_batch::RecordBatch, array::as_boolean_array}, error::DataFusionError, common::Result};
 use tracing::{debug, info};
 
 use crate::ShortCircuit;
@@ -235,7 +235,7 @@ impl PhysicalExpr for BooleanEvalExpr {
     
     fn evaluate(&self, batch: &RecordBatch) -> datafusion::common::Result<ColumnarValue> {
         if let Some(ref predicate) = self.predicate {
-            info!("batch len: {:}", batch.num_rows());
+            debug!("evalute batch len: {:}", batch.num_rows());
             let batch_len = (batch.num_rows() + 7) / 8;
             let predicate = predicate.as_ref().get();
             let predicate_ref = unsafe {predicate.as_ref().unwrap() };
@@ -244,6 +244,7 @@ impl PhysicalExpr for BooleanEvalExpr {
                     let res = predicate_ref.eval(batch, vec![u8::MAX; batch_len], true)?;
                     debug!("res len: {:}", res.len());
                     let array = Arc::new(build_boolean_array(res, batch.num_rows()));
+                    debug!("evalute true count: {:}", &array.true_count());
                     Ok(ColumnarValue::Array(array))
                 }
                 PhysicalPredicate::Or { .. } => {

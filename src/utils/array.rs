@@ -13,7 +13,6 @@ pub(crate) fn build_boolean_array(mut res: Vec<u8>, array_len: usize) -> Boolean
     let builder = ArrayData::builder(DataType::Boolean)
         .len(array_len)
         .add_buffer(value_buffer);
-
-    let array_data = unsafe { builder.build_unchecked() };
+    let array_data = builder.build().unwrap();
     BooleanArray::from(array_data)
 }
