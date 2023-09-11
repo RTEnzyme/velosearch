@@ -108,7 +108,7 @@ impl HandlerT for PostingHandler {
             // handlers.push(tokio::spawn(async move {
                 debug!("start construct query");
             let mut time_distri = Vec::new();
-            let round = 15;
+            let round = 1;
             let provider = ctx.index_provider("__table__").await?;
             let schema = &provider.schema();
             let table_source = provider_as_source(Arc::clone(&provider));
@@ -126,10 +126,11 @@ impl HandlerT for PostingHandler {
                 let predicate = predicate.build();
                 info!("Predicate{:}: {:?}", i, predicate);
                 let index = ctx.boolean_with_provider(table_source.clone(), &schema, predicate, false).await.unwrap();
-                    index
+                let res = index
                     // .explain(false, true).unwrap()
                     // .show().await.unwrap();
                     .collect().await.unwrap();
+                info!("res: {:?}", res);
                 let time = timer.elapsed().as_micros();
                 time_distri.push(time);
                 time_sum += time;

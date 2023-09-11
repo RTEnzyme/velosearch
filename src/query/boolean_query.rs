@@ -1,17 +1,17 @@
 use std::sync::Arc;
 
 use datafusion::{
-    prelude::{col, Expr, boolean_or, boolean_and}, 
-    logical_expr::{LogicalPlan, LogicalPlanBuilder, Projection}, 
+    prelude::{col, Expr, boolean_or, boolean_and, create_udaf}, 
+    logical_expr::{LogicalPlan, LogicalPlanBuilder, Projection, Volatility}, 
     execution::context::{SessionState, TaskContext}, 
     error::DataFusionError, 
     physical_plan::{ExecutionPlan, collect}, 
-    arrow::{record_batch::RecordBatch, util::pretty}, common::{DFSchema, DFSchemaRef}
+    arrow::{record_batch::RecordBatch, util::pretty, datatypes::DataType}, common::{DFSchema, DFSchemaRef}
 };
 use tokio::time::Instant;
 use tracing::{debug, info};
 
-use crate::{Result, utils::FastErr};
+use crate::{Result, utils::FastErr, physical_expr::CountValid};
 
 
 
@@ -124,6 +124,25 @@ impl BooleanQuery {
             _ => Err(FastErr::UnimplementErr("Predicate expression must be the BinaryExpr".to_string()))
         }   
     } 
+
+    /// Count query
+    pub fn count_agg(self) -> Result<Self> {
+        // Add custom Aggregation Function
+        let count_valid = create_udaf(
+            "count_valid",
+            DataType::Boolean,
+            Arc::new(DataType::Int64),
+            Volatility::Immutable,
+            Arc::new(|_| Ok(Box::new(CountValid::new()))),
+            Arc::new(vec![DataType::Boolean, DataType::Int64]),
+        );
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .aggregate(vec![] as Vec<Expr>, vec![count_valid.call(vec![col("mask")])])?.build()?;
+        Ok(Self {
+            plan,
+            session_state: self.session_state,
+        })
+    }
 
     /// Create a physical plan
     pub async fn create_physical_plan(self) -> Result<Arc<dyn ExecutionPlan>> {

@@ -5,16 +5,16 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion::{
     execution::{context::{SessionState, QueryPlanner}, runtime_env::RuntimeEnv}, 
-    prelude::{SessionConfig, Expr, Column}, sql::TableReference, logical_expr::{LogicalPlanBuilder, LogicalPlan, TableSource}, 
+    prelude::{SessionConfig, Expr, Column, create_udaf}, sql::TableReference, logical_expr::{LogicalPlanBuilder, LogicalPlan, TableSource, Volatility}, 
     datasource::{provider_as_source, TableProvider}, error::DataFusionError, 
     optimizer::OptimizerRule, 
-    physical_optimizer::PhysicalOptimizerRule, scalar::ScalarValue, physical_plan::{PhysicalPlanner, ExecutionPlan}, arrow::datatypes::Schema
+    physical_optimizer::PhysicalOptimizerRule, scalar::ScalarValue, physical_plan::{PhysicalPlanner, ExecutionPlan}, arrow::datatypes::{Schema, DataType}
 };
 use parking_lot::RwLock;
 use tokio::time::Instant;
 use tracing::debug;
 
-use crate::{query::boolean_query::BooleanQuery, utils::FastErr, BooleanPhysicalPlanner, MinOperationRange, RewriteBooleanPredicate, PrimitivesCombination};
+use crate::{query::boolean_query::BooleanQuery, utils::FastErr, BooleanPhysicalPlanner, MinOperationRange, RewriteBooleanPredicate, PrimitivesCombination, physical_expr::CountValid};
 use crate::utils::Result;
 
 #[derive(Clone)]
@@ -53,7 +53,7 @@ impl BooleanContext {
         let state = state.with_optimizer_rules(optimizer_rules());
         // Add custom physical optimizer rules
         let state = state.with_physical_optimizer_rules(physical_optimizer_rulse());
-        // Ad custom Physical Planner
+        // Add custom Physical Planner
         let state = state.with_query_planner(Arc::new(BooleanPlanner {}));
         Self::with_state(state)
     }
