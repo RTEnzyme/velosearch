@@ -1,4 +1,4 @@
-use std::{sync::Arc, collections::HashMap};
+use std::sync::Arc;
 
 use datafusion::{
     prelude::{col, Expr, boolean_or, boolean_and}, 
@@ -6,7 +6,7 @@ use datafusion::{
     execution::context::{SessionState, TaskContext}, 
     error::DataFusionError, 
     physical_plan::{ExecutionPlan, collect}, 
-    arrow::{record_batch::RecordBatch, util::pretty, datatypes::DataType}, common::{DFSchema, DFSchemaRef, DFField}
+    arrow::{record_batch::RecordBatch, util::pretty}, common::{DFSchema, DFSchemaRef}
 };
 use tokio::time::Instant;
 use tracing::{debug, info};
@@ -104,14 +104,14 @@ impl BooleanQuery {
         debug!("Build boolean_predicate");
         let mut project_exprs = binary_expr_columns(&predicate);
         project_exprs.push(col("__id__"));
-        let input_schema = DFSchema {
-            fields: project_exprs.iter().map(|e| if let Expr::Column(c) = e {
-                DFField::new(c.relation.as_ref().map(|v| v.as_str()), &c.name, DataType::Boolean, false)
-            } else {
-                unreachable!()
-            }).collect(),
-            metadata: HashMap::new(),
-        };
+        // let input_schema = DFSchema {
+        //     fields: project_exprs.iter().map(|e| if let Expr::Column(c) = e {
+        //         DFField::new(c.relation.as_ref().map(|v| v.as_str()), &c.name, DataType::Boolean, false)
+        //     } else {
+        //         unreachable!()
+        //     }).collect(),
+        //     metadata: HashMap::new(),
+        // };
         match predicate {
             Expr::BooleanQuery(expr) => {
                 // let project_plan = boolean_project(self.plan, project_exprs, input_schema).unwrap();

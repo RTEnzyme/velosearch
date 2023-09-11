@@ -1,4 +1,4 @@
-use std::{env, sync::Arc, time::Instant};
+use std::{env, sync::Arc};
 
 use datafusion::{sql::TableReference, datasource::provider_as_source};
 use fastfull_search::{utils::{Result, builder::deserialize_posting_table}, BooleanContext, jit::AOT_PRIMITIVES, query::boolean_query::BooleanPredicateBuilder};
@@ -22,11 +22,16 @@ async fn main_inner(index_dir: String) -> Result<()> {
     for line_res in stdin.lines() {
         let line = line_res?;
         let query = line.split("\t").skip(1).collect::<String>();
+        let is_cnf = query.starts_with("+");
         let fields = query.split(" ");
         let trim_fields: Vec<String> = fields
             .map(|s| s.chars().skip(1).collect())
             .collect();
-        let predicate = BooleanPredicateBuilder::must(&trim_fields.iter().map(|v| v.as_str()).collect::<Vec<&str>>())?;
+        let predicate = if is_cnf {
+            BooleanPredicateBuilder::must(&trim_fields.iter().map(|v| v.as_str()).collect::<Vec<&str>>())?
+        } else {
+            BooleanPredicateBuilder::should(&trim_fields.iter().map(|v| v.as_str()).collect::<Vec<&str>>())?
+        };
         let predicate = predicate.build();
         let index = ctx.boolean_with_provider(table_source.clone(), &schema, predicate, false).await.unwrap();
         index.collect().await.unwrap();

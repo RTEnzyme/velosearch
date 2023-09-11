@@ -1,7 +1,6 @@
 use std::{sync::Arc, any::Any, cell::SyncUnsafeCell};
 
-use datafusion::{physical_plan::{expressions::{BinaryExpr, Column}, PhysicalExpr, ColumnarValue}, arrow::{datatypes::{Schema, DataType}, record_batch::RecordBatch, array::BooleanArray}, error::DataFusionError, common::Result};
-use tracing::debug;
+use datafusion::{physical_plan::{expressions::{BinaryExpr, Column}, PhysicalExpr, ColumnarValue}, arrow::{datatypes::{Schema, DataType}, record_batch::RecordBatch}, error::DataFusionError, common::Result};
 
 use crate::ShortCircuit;
 use crate::utils::array::build_boolean_array;
