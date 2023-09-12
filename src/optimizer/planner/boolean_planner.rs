@@ -143,7 +143,7 @@ impl BooleanPhysicalPlanner {
                                 let term_meta = posting.term_meta_of(s);
                                 if let Some(term_meta) = term_meta {
                                     debug!("{s} term_meta nums: {:?}", term_meta.nums[0]);
-                                    debug!("{s} term_meta true count: {:?}", term_meta.distribution[0].true_count());
+                                    // debug!("{s} term_meta true count: {:?}", term_meta.distribution[0].true_count());
                                     let sel = term_meta.selectivity;
                                     ((s, i), (Some(term_meta), (s, sel)))
                                 } else {

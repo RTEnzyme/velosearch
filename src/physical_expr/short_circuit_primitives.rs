@@ -58,7 +58,7 @@ impl ShortCircuit {
         Self::try_new(batch_idx, predicate, node_num + 1, leaf_num, 0).unwrap()
     }
 
-    pub fn eval(&self, init_v: &mut Vec<u8>, batch: &RecordBatch) -> Vec<u8> {
+    pub fn eval(&self, init_v: &mut [u8], batch: &RecordBatch) -> Vec<u8> {
         let batch_len = init_v.len();
         let batch: Vec<*const u8> = self.batch_idx
             .iter()

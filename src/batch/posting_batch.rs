@@ -1,6 +1,6 @@
 use std::{sync::Arc, ops::Index, collections::{HashMap, BTreeMap}, mem::size_of_val, ptr::NonNull, cell::RefCell, arch::x86_64::{_pext_u64, _blsr_u64}};
 
-use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray, GenericBinaryArray, GenericBinaryBuilder}, record_batch::{RecordBatch, RecordBatchOptions}, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
+use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type, ToByteSlice}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray, GenericBinaryArray, GenericBinaryBuilder, as_boolean_array, UInt64Array}, record_batch::{RecordBatch, RecordBatchOptions}, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
 use serde::{Serialize, Deserialize};
 use tracing::{debug, info};
 use crate::utils::{Result, FastErr};
@@ -108,14 +108,14 @@ impl PostingBatch {
         min_range: u64,
     ) -> Result<RecordBatch> {
         debug!("project_fold");
-        const CHUNK_SIZE: usize = 64;
+        const CHUNK_SIZE: usize = 8;
         let valid_batch_num = min_range.count_ones() as usize;
         let mut batches: Vec<ArrayRef> = Vec::with_capacity(indices.len());
         assert_eq!(indices.len(), distris.len());
         for (idx, distri) in indices.into_iter().zip(distris.into_iter()) {
             // To be optimized, we can convert bitvec to BooleanArray
             if idx.is_none() {
-                batches.push(Arc::new(BooleanArray::from(vec![] as Vec<bool>)));
+                batches.push(Arc::new(UInt64Array::from(vec![] as Vec<u64>)));
                 continue;
             }
 
@@ -143,45 +143,49 @@ impl PostingBatch {
             } else if  boundary_idx == boundary.len() - 1 {
                 posting.len() - boundary[boundary_idx] as usize
             } else {
-                batches.push(Arc::new(BooleanArray::from(vec![] as Vec<bool>)));
+                batches.push(Arc::new(UInt64Array::from(vec![] as Vec<u64>)));
                 continue;
             };
 
-            let mut valid_batch: Vec<[u8; 64]> =vec![[0; 64]; valid_batch_num];
+            let mut valid_batch: Vec<[u64; 8]> =vec![[0; 8]; valid_batch_num];
             let valid_mask = unsafe { _pext_u64(min_range, distri) };
             let mut write_mask = unsafe { _pext_u64(distri, min_range) };
+            debug!("valid_mask: {:b}", valid_mask);
+            debug!("distri: {:b}", distri);
+            debug!("write_mask: {:b}", write_mask);
 
-            let mut cnt = 0;
             let mut write_pos = write_mask.trailing_zeros() as usize;
             write_mask = clear_lowest_set_bit(write_mask);
             for i in 0..boundary_len.min(64) {
-                if valid_mask & 1 << i == 0 {
+                if valid_mask & (1 << i) == 0 {
                     continue
                 }
-                let batch = posting.value(start_idx + cnt);
-
+                let batch = posting.value(start_idx + i);
                 if batch.len() > 32 {
-                    valid_batch[write_pos] = unsafe {*(batch.as_ptr() as *const [u8; 64])};
+                    let batch = unsafe {*(batch.as_ptr() as *const [u64; 8])};
+                    assert!(batch.iter().map(|v| v.count_ones()).sum::<u32>() > 0);
+                    valid_batch[write_pos] = batch;
                 } else {
                     // means this's Integer list
                     let batch = unsafe {batch.align_to::<u16>().1 };
+                    assert!(batch.len() > 0);
                     //  means this's bitmap
                     let mut bitmap = [0; CHUNK_SIZE];
                     for off in batch {
-                        bitmap[(*off >> 3) as usize] |= 1 << (*off % (1 << 3));
+                        bitmap[(*off >> 6) as usize] |= 1 << (*off % (1 << 6));
                     }
                     valid_batch[write_pos] = bitmap;
                 }
-                cnt += 1;
                 write_pos = write_mask.trailing_zeros() as usize;
                 write_mask = clear_lowest_set_bit(write_mask);
             }
-            let batch = build_boolean_array_u8(valid_batch.into_flattened(), 512 * valid_batch_num);
-            batches.push(batch);
+            let batch = UInt64Array::from(valid_batch.into_flattened());
+            // info!("fetch true count: {:}", as_boolean_array(&batch).true_count());
+            batches.push(Arc::new(batch));
         }
         batches.insert(projected_schema.index_of("__id__").expect("Should have __id__ field"), Arc::new(UInt32Array::from_iter_values((self.range.start).. (self.range.start + 32 * self.range.nums32))));
         debug!("end of project fold");
-        let option = RecordBatchOptions::new().with_row_count(Some(valid_batch_num * 512));
+        let option = RecordBatchOptions::new().with_row_count(Some(valid_batch_num * 8));
         Ok(RecordBatch::try_new_with_options(projected_schema, batches, &option)?)
     }
 
@@ -296,7 +300,7 @@ impl Index<&str> for PostingBatch {
 #[derive(Serialize, Deserialize)]
 pub struct PostingBatchBuilder {
     current: u32,
-    term_dict: RefCell<BTreeMap<String, Vec<(u32, u8)>>>,
+    pub term_dict: RefCell<BTreeMap<String, Vec<(u32, u8)>>>,
     term_num: usize,
 }
 
@@ -330,93 +334,26 @@ impl PostingBatchBuilder {
     }
 
     pub fn build(self) -> Result<PostingBatch> {
-        let term_dict = self.term_dict
-            .into_inner();
-        let mut schema_list = Vec::new();
-        let mut postings: Vec<Arc<GenericBinaryArray<i32>>> = Vec::new();
-        let mut freqs = Vec::new();
-        let mut boundarys = Vec::new();
-        term_dict
-            .into_iter()
-            .for_each(|(k, v)| {
-                let mut boundary = vec![0];
-                let mut cnter = 0;
-                let mut posting_builder = GenericBinaryBuilder::new();
-                let mut builder_len = 0;
-                let mut batch_num = 0;
-
-                let mut freq: Vec<Option<Vec<Option<u8>>>> = vec![None; 4];
-                let mut buffer: Vec<u16> = Vec::new();
-                v.into_iter()
-                .for_each(|(p, f)| {
-                    if p - cnter < 512 {
-                        buffer.push((p - cnter) as u16);
-                    } else {
-                        let skip_num = (p - cnter) / 512;
-                        cnter += skip_num * 512;
-                        batch_num += skip_num;
-                        if batch_num % 64 == 0 {
-                            boundary.push(builder_len);
-                        }
-                        
-                        if buffer.len() > 16 {
-                            let mut bitmap = vec![0; 64];
-                            for i in &buffer {
-                                let off = *i;
-                                bitmap[(off >> 3) as usize] |= 1 << (off % (1 << 3));
-                            }
-                            posting_builder.append_value(bitmap);
-                        } else {
-                            posting_builder.append_value(unsafe {buffer.as_slice().align_to::<u8>().1 });
-                        }
-                        builder_len += 1;
-                        buffer.clear();
-                    }
-
-                    let idx=  f / 64 % 8;
-                    match freq[idx as usize] {
-                        Some(ref mut v) => {
-                            v.push(Some(f));
-                        }
-                        None => {
-                            freq[idx as usize] = Some(vec![Some(f)]);
-                        }
-                    }
-                });
-                freqs.push(Arc::new(GenericListArray::<i32>::from_iter_primitive::<UInt8Type, _, _>(freq)));
-                schema_list.push(Field::new(k.clone(), DataType::UInt32, false));
-                postings.push(Arc::new(posting_builder.finish()));
-                boundarys.push(boundary);
-            });
-        schema_list.push(Field::new("__id__", DataType::UInt32, false));
-        postings.push(Arc::new(GenericBinaryArray::<i32>::from(vec![] as Vec<&[u8]>)));
-        PostingBatch::try_new_with_freqs(
-            Arc::new(Schema::new(schema_list)),
-            postings,
-            freqs,
-            boundarys,
-            Arc::new(BatchRange::new(0, 512))
-        )
+        self.build_with_idx(None, 0)
     }
 
-    pub fn build_with_idx(self, idx: &mut BTreeMap<String, TermMetaBuilder>, partition_num: usize) -> Result<PostingBatch> {
+    pub fn build_with_idx(self, idx: Option<&RefCell<BTreeMap<String, TermMetaBuilder>>>, partition_num: usize) -> Result<PostingBatch> {
         let term_dict = self.term_dict
             .into_inner();
         let mut schema_list = Vec::new();
         let mut postings: Vec<Arc<GenericBinaryArray<i32>>> = Vec::new();
         let mut freqs = Vec::new();
         let mut boundarys = Vec::new();
-        term_dict
-            .into_iter()
-            .enumerate()
-            .for_each(|(i, (k, v))| {
+        
+        for (i, (k, v)) in term_dict.into_iter().enumerate() {
                 let mut boundary = vec![0];
                 let mut cnter = 0;
                 let mut posting_builder = GenericBinaryBuilder::new();
                 let mut builder_len = 0;
                 let mut batch_num = 0;
-
-                idx.get_mut(&k).unwrap().add_idx(i as u32, partition_num);
+                if idx.is_some() {
+                    idx.as_ref().unwrap().borrow_mut().get_mut(&k).unwrap().add_idx(i as u32, partition_num);
+                }
                 let mut freq: Vec<Option<Vec<Option<u8>>>> = vec![None; 4];
                 let mut buffer: Vec<u16> = Vec::new();
                 v.into_iter()
@@ -426,23 +363,31 @@ impl PostingBatchBuilder {
                     } else {
                         let skip_num = (p - cnter) / 512;
                         cnter += skip_num * 512;
-                        batch_num += skip_num;
-                        if batch_num % 64 == 0 {
+
+                        let skip_boundary = (batch_num + skip_num) / 64 - batch_num / 64;
+                        for _ in 0..skip_boundary{
                             boundary.push(builder_len);
                         }
+                        batch_num += skip_num;
                         
                         if buffer.len() > 16 {
-                            let mut bitmap = vec![0; 64];
+                            let mut bitmap: Vec<u64> = vec![0; 8];
                             for i in &buffer {
                                 let off = *i;
-                                bitmap[(off >> 3) as usize] |= 1 << (off % (1 << 3));
+                                bitmap[(off >> 6) as usize] |= 1 << (off % (1 << 6));
                             }
-                            posting_builder.append_value(bitmap);
-                        } else {
-                            posting_builder.append_value(unsafe {buffer.as_slice().align_to::<u8>().1 });
+                            posting_builder.append_value(bitmap.to_byte_slice());
+                            builder_len += 1;
+                        } else if buffer.len() > 0 {
+                            posting_builder.append_value(unsafe {
+                                let value = buffer.as_slice().align_to::<u8>();
+                                assert!(value.0.len() == 0 && value.2.len() == 0);
+                                value.1
+                            });
+                            builder_len += 1;
                         }
-                        builder_len += 1;
                         buffer.clear();
+                        buffer.push((p - cnter) as u16);
                     }
 
                     let idx=  f / 64 % 8;
@@ -455,11 +400,28 @@ impl PostingBatchBuilder {
                         }
                     }
                 });
+
+                if buffer.len() > 0 {
+                    if buffer.len() > 16 {
+                        let mut bitmap: Vec<u64> = vec![0; 8];
+                        for i in &buffer {
+                            let off = *i;
+                            bitmap[(off >> 6) as usize] |= 1 << (off % (1 << 6));
+                        }
+                        posting_builder.append_value(bitmap.to_byte_slice());
+                    } else {
+                        posting_builder.append_value(unsafe {
+                            let value = buffer.as_slice().align_to::<u8>();
+                            assert!(value.0.len() == 0 && value.2.len() == 0);
+                            value.1
+                        });
+                    }
+                }
                 freqs.push(Arc::new(GenericListArray::<i32>::from_iter_primitive::<UInt8Type, _, _>(freq)));
                 schema_list.push(Field::new(k.clone(), DataType::UInt32, false));
                 postings.push(Arc::new(posting_builder.finish()));
                 boundarys.push(boundary);
-            });
+        }
         schema_list.push(Field::new("__id__", DataType::UInt32, false));
         postings.push(Arc::new(GenericBinaryArray::<i32>::from(vec![] as Vec<&[u8]>)));
         PostingBatch::try_new_with_freqs(
@@ -479,8 +441,8 @@ fn clear_lowest_set_bit(v: u64) -> u64 {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct TermMetaBuilder {
-    distribution: Vec<Vec<bool>>,
-    nums: Vec<u32>,
+    pub distribution: Vec<Vec<u64>>,
+    pub nums: Vec<u32>,
     idx: Vec<Option<u32>>,
     partition_num: usize,
     bounder: Option<u32>,
@@ -489,7 +451,7 @@ pub struct TermMetaBuilder {
 impl TermMetaBuilder {
     pub fn new(batch_num: usize, partition_num: usize) -> Self {
         Self {
-            distribution: vec![vec![false; batch_num]; partition_num],
+            distribution: vec![vec![0; (batch_num + 63) / 64]; partition_num],
             nums: vec![0; partition_num],
             idx: vec![None; partition_num],
             partition_num,
@@ -502,10 +464,10 @@ impl TermMetaBuilder {
             self.nums[partition_num] += 1;
             self.bounder = Some(id);
         }
-        if self.distribution[partition_num][i] {
+        if self.distribution[partition_num][i / 64] & (1 << (i % 64)) != 0 {
             return;
         }
-        self.distribution[partition_num][i] = true;
+        self.distribution[partition_num][i / 64] |= 1 << (i % 64);
     }
 
     pub fn add_idx(&mut self, idx: u32, partition_num: usize) {
@@ -514,20 +476,20 @@ impl TermMetaBuilder {
 
 
     pub fn build(self) -> TermMeta {
-        let (distribution, index): (Vec<Arc<BooleanArray>>, _)= (0..self.partition_num)
+        let (distribution, index): (Vec<Arc<UInt64Array>>, _)= (0..self.partition_num)
             .into_iter()
             .map(|v| {
                 if self.nums[v] == 0 {
-                    (Arc::new(BooleanArray::from(vec![false; self.distribution[0].len()])), None)
+                    (Arc::new(UInt64Array::from(vec![0; self.distribution[0].len()])), None)
                 } else {
-                    let distribution = Arc::new(BooleanArray::from_slice(&self.distribution[v]));
+                    let distribution = Arc::new(UInt64Array::from_slice(&self.distribution[v]));
                     let index = self.idx[v].clone();
                     (distribution, index)
                 }
             })
             .unzip();
         let valid_batch_num: usize = distribution.iter()
-            .map(|d| d.true_count() )
+            .map(|d| d.iter().map(|v| unsafe { v.unwrap_unchecked().count_ones() }).sum::<u32>() as usize)
             .sum();
         let sel = self.nums.iter().map(|v| *v).sum::<u32>() as f64 / (512. * valid_batch_num as f64);
         TermMeta {

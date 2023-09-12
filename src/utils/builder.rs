@@ -1,7 +1,7 @@
 use std::{path::PathBuf, collections::{BTreeMap, HashMap}, fs::File, io::{BufReader, BufWriter}, sync::Arc};
 
 use adaptive_hybrid_trie::TermIdx;
-use datafusion::{arrow::{datatypes::{Schema, Field, DataType}, array::BooleanArray}, common::TermMeta};
+use datafusion::{arrow::{datatypes::{Schema, Field, DataType}, array::{BooleanArray, UInt64Array}}, common::TermMeta};
 use tracing::info;
 
 use crate::{datasources::posting_table::PostingTable, batch::{PostingBatchBuilder, BatchRange, TermMetaBuilder}, utils::array::build_boolean_array};
@@ -9,7 +9,7 @@ use crate::{datasources::posting_table::PostingTable, batch::{PostingBatchBuilde
 #[derive(serde::Serialize, serde::Deserialize)]
 struct TermMetaTemp {
     /// Which horizantal partition batches has this Term
-    pub distribution: Vec<Vec<u8>>,
+    pub distribution: Vec<Vec<u64>>,
     /// Witch Batch has this Term
     pub index: Arc<Vec<Option<u32>>>,
     /// The number of this Term
@@ -25,7 +25,7 @@ pub fn serialize_term_meta(term_meta: &Vec<TermMeta>, dump_path: String) {
     let term_metas = term_meta
         .iter()
         .map(|v| {
-            let distribution: Vec<Vec<u8>> = v.distribution
+            let distribution: Vec<Vec<u64>> = v.distribution
                 .as_ref()
                 .iter()
                 .map(|v| {
@@ -108,8 +108,7 @@ pub fn deserialize_posting_table(dump_path: String) -> Option<PostingTable> {
             let distris = v.distribution
                 .into_iter()
                 .map(|v| {
-                    let array_len = v.len() * 8;
-                    Arc::new(build_boolean_array(v, array_len))
+                    Arc::new(UInt64Array::from(v))
                 })
                 .collect();
             TermMeta {

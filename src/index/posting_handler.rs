@@ -110,7 +110,7 @@ impl HandlerT for PostingHandler {
             // handlers.push(tokio::spawn(async move {
                 debug!("start construct query");
             let mut time_distri = Vec::new();
-            let round = 1;
+            let round = 15;
             let provider = ctx.index_provider("__table__").await?;
             let schema = &provider.schema();
             let table_source = provider_as_source(Arc::clone(&provider));

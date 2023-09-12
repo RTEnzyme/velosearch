@@ -1,6 +1,6 @@
 use std::{sync::Arc, any::Any, cell::SyncUnsafeCell};
 
-use datafusion::{physical_plan::{expressions::{BinaryExpr, Column}, PhysicalExpr, ColumnarValue}, arrow::{datatypes::{Schema, DataType}, record_batch::RecordBatch, array::as_boolean_array}, error::DataFusionError, common::Result};
+use datafusion::{physical_plan::{expressions::{BinaryExpr, Column}, PhysicalExpr, ColumnarValue}, arrow::{datatypes::{Schema, DataType}, record_batch::RecordBatch, array::{as_boolean_array, UInt64Array}}, error::DataFusionError, common::{Result, cast::as_uint64_array}};
 use tracing::{debug, info};
 
 use crate::ShortCircuit;
@@ -92,7 +92,7 @@ pub enum PhysicalPredicate {
 }
 
 impl PhysicalPredicate {
-    fn eval(&self, batch: &RecordBatch, init_v: Vec<u8>, is_and: bool) -> Result<Vec<u8>> {
+    fn eval(&self, batch: &RecordBatch, init_v: Vec<u64>, is_and: bool) -> Result<Vec<u64>> {
         let mut init_v = init_v;
         match self {
             PhysicalPredicate::And { args } => {
@@ -112,11 +112,7 @@ impl PhysicalPredicate {
                     Primitives::BitwisePrimitive(b) => {
                         let tmp = b.evaluate(batch)?
                         .into_array(0);
-                        let res = unsafe { 
-                            tmp.data()
-                            .buffers()[0]
-                            .align_to::<u8>().1
-                        };
+                        let res = as_uint64_array(&tmp).unwrap();
                         if is_and {
                             if res.len() == 0 {
                                 init_v.fill(0);
@@ -124,7 +120,7 @@ impl PhysicalPredicate {
                             } else {
                                 Ok(init_v.into_iter()
                                 .zip(res.into_iter())
-                                .map(|(i, j)| i & j)
+                                .map(|(i, j)| i & unsafe { j.unwrap_unchecked() })
                                 .collect())
                             }
                         } else {
@@ -133,17 +129,19 @@ impl PhysicalPredicate {
                             } else {
                                 Ok(init_v.into_iter()
                                 .zip(res.into_iter())
-                                .map(|(i, j)| i | j)
+                                .map(|(i, j)| i | unsafe { j.unwrap_unchecked() })
                                 .collect())
                             }
                         }
                     }
                     Primitives::ShortCircuitPrimitive(s) => {
                         if is_and {
-                            Ok(s.eval(&mut init_v, batch))
+                            unsafe { s.eval(init_v.align_to_mut().1, batch).align_to::<u64>() };
+                            Ok(init_v)
                         } else {
-                            let mut init_v_or = vec![u8::MAX; init_v.len()];
+                            let mut init_v_or = vec![u8::MAX; init_v.len() * 8];
                             s.eval(&mut init_v_or, batch);
+                            let init_v_or = unsafe { init_v_or.align_to::<u64>().1 };
                             for i in 0..init_v.len(){
                                 init_v[i] |= init_v_or[i];
                             }
@@ -153,29 +151,29 @@ impl PhysicalPredicate {
                     Primitives::ColumnPrimitive(c) => {
                         if is_and {
                             let eval_array = c.evaluate(batch)?.into_array(0);
-                            let eval_res = eval_array.data().buffers()[0].as_slice();
+                            let eval_res = as_uint64_array(&eval_array).unwrap();
                             if eval_res.len() == 0 {
                                 init_v.fill(0);
                                 Ok(init_v)
                             } else {
-                                assert_eq!(init_v.len(), eval_res.len());
+                                assert_eq!(init_v.len(), eval_res.len(), "evalue res: {:?}", eval_res);
                                 Ok(eval_res
                                     .into_iter()
                                     .zip(init_v.into_iter())
-                                    .map(|(i, j)| *i & j)
+                                    .map(|(i, j)| unsafe { i.unwrap_unchecked() } & j)
                                     .collect()
                                 )
                             }
                         } else {
                             let eval_array = c.evaluate(batch)?.into_array(0);
-                            let eval_res = eval_array.data().buffers()[0].as_slice();
+                            let eval_res = as_uint64_array(&eval_array).unwrap();
                             if eval_res.len() == 0 {
                                 Ok(init_v)
                             } else {
                                 Ok(eval_res
                                     .into_iter()
                                     .zip(init_v.into_iter())
-                                    .map(|(i, j)| i | j)
+                                    .map(|(i, j)| unsafe { i.unwrap_unchecked() } | j)
                                     .collect()
                                 )
                             }
@@ -236,20 +234,20 @@ impl PhysicalExpr for BooleanEvalExpr {
     fn evaluate(&self, batch: &RecordBatch) -> datafusion::common::Result<ColumnarValue> {
         if let Some(ref predicate) = self.predicate {
             debug!("evalute batch len: {:}", batch.num_rows());
-            let batch_len = (batch.num_rows() + 7) / 8;
+            let batch_len = batch.num_rows();
             let predicate = predicate.as_ref().get();
             let predicate_ref = unsafe {predicate.as_ref().unwrap() };
             match predicate_ref {
                 PhysicalPredicate::And { .. } => {
-                    let res = predicate_ref.eval(batch, vec![u8::MAX; batch_len], true)?;
+                    let res = predicate_ref.eval(batch, vec![u64::MAX; batch_len], true)?;
                     debug!("res len: {:}", res.len());
-                    let array = Arc::new(build_boolean_array(res, batch.num_rows()));
-                    debug!("evalute true count: {:}", &array.true_count());
+                    let array = Arc::new(UInt64Array::from(res));
+                    // debug!("evalute true count: {:}", &array.true_count());
                     Ok(ColumnarValue::Array(array))
                 }
                 PhysicalPredicate::Or { .. } => {
                     let res = predicate_ref.eval(batch, vec![0; batch_len], false)?;
-                    let array = Arc::new(build_boolean_array(res, batch.num_rows()));
+                    let array = Arc::new(UInt64Array::from(res));
                     Ok(ColumnarValue::Array(array))
                 }
                 PhysicalPredicate::Leaf { primitive } => {

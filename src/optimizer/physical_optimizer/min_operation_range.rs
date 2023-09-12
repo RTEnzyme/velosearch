@@ -7,7 +7,7 @@ use datafusion::{
     physical_optimizer::PhysicalOptimizerRule, 
     physical_plan::{rewrite::{TreeNodeRewriter, RewriteRecursion, TreeNodeRewritable}, 
     ExecutionPlan, boolean::BooleanExec, PhysicalExpr}, error::DataFusionError, 
-    arrow::{datatypes::Schema, array::{BooleanArray, Array}, record_batch::RecordBatch}, common::TermMeta,
+    arrow::{datatypes::Schema, array::{BooleanArray, Array, UInt64Array}, record_batch::RecordBatch}, common::TermMeta,
 };
 use datafusion::common::Result;
 use tracing::debug;
@@ -49,7 +49,7 @@ struct GetMinRange {
     partition_schema: Option<Arc<Schema>>,
     predicate: Option<Arc<dyn PhysicalExpr>>,
     is_score: bool,
-    min_range: Option<Vec<Arc<BooleanArray>>>,
+    min_range: Option<Vec<Arc<UInt64Array>>>,
 }
 
 impl GetMinRange {
@@ -82,7 +82,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
             let term_stats: Vec<Option<TermMeta>> = posting.term_metas_of(&project_terms);
             let partition_num = posting.output_partitioning().partition_count();
             debug!("collect partition range");
-            let partition_range: Vec<Arc<BooleanArray>> = (0..partition_num)
+            let partition_range: Vec<Arc<UInt64Array>> = (0..partition_num)
                 // .into_par_iter()
                 .into_iter()
                 .map(|p| {
@@ -93,7 +93,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                         }
                     }
                     if let Some(length) = length {
-                        let empty_array = Arc::new(BooleanArray::from(vec![false; length]));
+                        let empty_array = Arc::new(UInt64Array::from(vec![0; length]));
                         let distris = term_stats.iter()
                             .map(|t| {
                                 let res = match t {
@@ -114,16 +114,16 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                             .unwrap()
                             .into_array(0)
                             .as_any()
-                            .downcast_ref::<BooleanArray>().unwrap()
+                            .downcast_ref::<UInt64Array>().unwrap()
                             .to_owned()
                         )
                     } else {
-                        Arc::new(BooleanArray::from(vec![] as Vec<bool>))
+                        Arc::new(UInt64Array::from(vec![] as Vec<u64>))
                     }
                 })
                 .collect();
             debug!("Collect term statistics");
-            debug!("partition 0 min_range len: {:?}", partition_range[0].true_count());
+            // debug!("partition 0 min_range len: {:?}", partition_range[0].true_count());
             self.min_range = Some(partition_range);
             self.partition_stats = Some(term_stats);
             debug!("End Pre_visit PostingExec");

@@ -2,7 +2,7 @@ use std::{any::Any, sync::Arc, task::Poll, mem::size_of_val};
 
 use async_trait::async_trait;
 use datafusion::{
-    arrow::{datatypes::{SchemaRef, Schema, Field, DataType}, record_batch::RecordBatch, array::{BooleanArray, as_boolean_array}, compute::and}, 
+    arrow::{datatypes::{SchemaRef, Schema, Field, DataType}, record_batch::RecordBatch, array::{BooleanArray, as_boolean_array, UInt64Array}, compute::and}, 
     datasource::TableProvider, 
     logical_expr::TableType, execution::context::SessionState, prelude::Expr, error::{Result, DataFusionError}, 
     physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream, metrics::{ExecutionPlanMetricsSet, MetricsSet}}, common::TermMeta};
@@ -122,7 +122,7 @@ pub struct PostingExec {
     pub term_idx: Arc<TermIdx<TermMeta>>,
     pub projected_schema: SchemaRef,
     pub projection: Option<Vec<usize>>,
-    pub partition_min_range: Option<Vec<Arc<BooleanArray>>>,
+    pub partition_min_range: Option<Vec<Arc<UInt64Array>>>,
     pub is_score: bool,
     pub projected_term_meta: Vec<Option<TermMeta>>,
     metric: ExecutionPlanMetricsSet,
@@ -232,7 +232,7 @@ impl PostingExec {
         term_idx: Arc<TermIdx<TermMeta>>,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
-        partition_min_range: Option<Vec<Arc<BooleanArray>>>,
+        partition_min_range: Option<Vec<Arc<UInt64Array>>>,
         projected_term_meta: Vec<Option<TermMeta>>,
     ) -> Result<Self> {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
@@ -274,9 +274,9 @@ pub struct PostingStream {
     /// is_score
     is_score: bool,
     /// min_range
-    min_range: Arc<BooleanArray>,
+    min_range: Arc<UInt64Array>,
     /// distris
-    distris: Vec<Option<Arc<BooleanArray>>>,
+    distris: Vec<Option<Arc<UInt64Array>>>,
     /// indecis
     indices: Vec<Option<u32>>,
     /// index the bucket
@@ -288,15 +288,12 @@ impl PostingStream {
     pub fn try_new(
         data: Arc<PostingBatch>,
         schema: SchemaRef,
-        min_range: Arc<BooleanArray>,
-        distris: Vec<Option<Arc<BooleanArray>>>,
+        min_range: Arc<UInt64Array>,
+        distris: Vec<Option<Arc<UInt64Array>>>,
         indices: Vec<Option<u32>>,
         is_score: bool,
     ) -> Result<Self> {
         debug!("Try new a PostingStream");
-        let valid_cnt = min_range.true_count();
-        debug!("Obtain the valid distri");
-        debug!("Finish Trying new a PostingStream");
         Ok(Self {
             posting_lists: data,
             schema,
@@ -314,11 +311,11 @@ impl Stream for PostingStream {
 
     fn poll_next(mut self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
         loop {
-            if self.index > self.min_range.len() / 64 {
+            if self.index >= self.min_range.len() {
                 return Poll::Ready(None);
             }
             if ! self.is_score {
-                let min_range = unsafe {self.min_range.values().slice_with_length(self.index * 8, 8).align_to::<u64>().1[0] };
+                let min_range = self.min_range.values().get(self.index).unwrap().clone();
                 debug!("min_range: {:b}", min_range);
                 if min_range == 0 {
                     self.index += 1;
@@ -328,7 +325,7 @@ impl Stream for PostingStream {
                     .map(|v| {
                         match v {
                             Some(v) => {
-                                Some(unsafe { v.values().slice_with_length(self.index * 8, 8).align_to::<u64>().1[0] })
+                                Some(unsafe { v.values().get(self.index).unwrap().clone() })
                             }
                             None => None
                         }
