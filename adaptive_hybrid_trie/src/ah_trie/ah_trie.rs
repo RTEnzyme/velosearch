@@ -31,7 +31,7 @@ pub struct AHTrie<T: Clone+Send+Sync> {
 
 
     /// Inner Adaptive Hybrid Trie
-    inner: Arc<RwLock<AHTrieInner<T>>>,
+    pub inner: Arc<RwLock<AHTrieInner<T>>>,
 
     /// Run-time tracing
     sample_counter: AtomicUsize,

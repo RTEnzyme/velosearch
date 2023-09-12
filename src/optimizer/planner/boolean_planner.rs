@@ -347,14 +347,14 @@ fn create_physical_expr(
     input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    if input_schema.fields.len() != input_dfschema.fields().len() {
-        return Err(DataFusionError::Internal(format!(
-            "create_physical_expr expected same number of fields, got \
-            Arrow schema with {} and DataFusion schema with {}",
-            input_schema.fields.len(),
-            input_dfschema.fields().len(),
-        )));
-    }
+    // if input_schema.fields.len() != input_dfschema.fields().len() {
+    //     return Err(DataFusionError::Internal(format!(
+    //         "create_physical_expr expected same number of fields, got \
+    //         Arrow schema with {} and DataFusion schema with {}",
+    //         input_schema.fields.len(),
+    //         input_dfschema.fields().len(),
+    //     )));
+    // }
     match e {
         Expr::Alias(expr, ..) => Ok(create_physical_expr(
             expr,

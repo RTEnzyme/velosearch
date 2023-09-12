@@ -7,7 +7,7 @@ use fst_rs::FST;
 use self::ah_trie::Encoding;
 pub use ah_trie::AHTrie;
 
-const CUT_OFF: usize = 4;
+const CUT_OFF: usize = 41;
 pub enum ChildNode {
     Fst(FST),
     Offset(usize),

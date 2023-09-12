@@ -314,12 +314,12 @@ impl Stream for PostingStream {
 
     fn poll_next(mut self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
         loop {
-            if self.index >= self.min_range.len() / 64 {
+            if self.index > self.min_range.len() / 64 {
                 return Poll::Ready(None);
             }
             if ! self.is_score {
                 let min_range = unsafe {self.min_range.values().slice_with_length(self.index * 8, 8).align_to::<u64>().1[0] };
-                debug!("min_range: {:}", min_range);
+                debug!("min_range: {:b}", min_range);
                 if min_range == 0 {
                     self.index += 1;
                     continue;
@@ -337,11 +337,6 @@ impl Stream for PostingStream {
                 let batch = self.posting_lists.project_fold(&self.indices, self.schema.clone(), &distris, self.index, min_range).unwrap();
                 self.index += 1;
 
-                let res = batch.columns()[..batch.num_columns() - 1]
-                    .iter()
-                    .map(|a| as_boolean_array(a))
-                    .cloned()
-                    .reduce(|a, b| and(&a, &b).unwrap());
                 return Poll::Ready(Some(Ok(batch)));
             } else {
                 unreachable!()
