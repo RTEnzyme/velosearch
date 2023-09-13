@@ -3,7 +3,7 @@ use std::{sync::Arc, any::Any, cell::SyncUnsafeCell};
 use datafusion::{physical_plan::{expressions::{BinaryExpr, Column}, PhysicalExpr, ColumnarValue}, arrow::{datatypes::{Schema, DataType}, record_batch::RecordBatch, array::{as_boolean_array, UInt64Array}}, error::DataFusionError, common::{Result, cast::as_uint64_array}};
 use tracing::{debug, info};
 
-use crate::ShortCircuit;
+use crate::{ShortCircuit, utils::avx512::{avx512_bitwise_and, avx512_bitwise_or}};
 
 #[derive(Clone, Debug)]
 pub enum Primitives {
@@ -156,12 +156,8 @@ impl PhysicalPredicate {
                                 Ok(init_v)
                             } else {
                                 assert_eq!(init_v.len(), eval_res.len(), "evalue res: {:?}", eval_res);
-                                Ok(eval_res
-                                    .into_iter()
-                                    .zip(init_v.into_iter())
-                                    .map(|(i, j)| unsafe { i.unwrap_unchecked() } & j)
-                                    .collect()
-                                )
+                                avx512_bitwise_and(&mut init_v, eval_res.values());
+                                Ok(init_v)
                             }
                         } else {
                             let eval_array = c.evaluate(batch)?.into_array(0);
@@ -169,12 +165,8 @@ impl PhysicalPredicate {
                             if eval_res.len() == 0 {
                                 Ok(init_v)
                             } else {
-                                Ok(eval_res
-                                    .into_iter()
-                                    .zip(init_v.into_iter())
-                                    .map(|(i, j)| unsafe { i.unwrap_unchecked() } | j)
-                                    .collect()
-                                )
+                                avx512_bitwise_or(&mut init_v, eval_res.values());
+                                Ok(init_v)
                             }
                         }
                     }

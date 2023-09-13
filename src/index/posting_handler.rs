@@ -122,14 +122,14 @@ impl HandlerT for PostingHandler {
                 // let predicate = BooleanPredicateBuilder::must(&["hot", "spring", "south", "dakota"]).unwrap();
                 // let predicate = BooleanPredicateBuilder::must(&["civil", "war", "battlefield"]).unwrap();
                 let timer = Instant::now();
-                let predicates = ["ace", "frehley"];
+                let predicates = ["the", "book", "of", "life"];
                 let predicate: Vec<String> = predicates
                     .into_iter()
                     .map(|w| {
                         self.tokenizer.token_stream(w).next().unwrap().text.clone()
                     })
                     .collect();
-                let predicate = BooleanPredicateBuilder::should(&predicate.iter().map(|w| w.as_str()).collect::<Vec<_>>()).unwrap();
+                let predicate = BooleanPredicateBuilder::must(&predicate.iter().map(|w| w.as_str()).collect::<Vec<_>>()).unwrap();
                 // let predicate = BooleanPredicateBuilder::should(&["and", "the"]).unwrap();
                 // let predicate = predicate.with_must(predicate1).unwrap();
                 let predicate = predicate.build();
