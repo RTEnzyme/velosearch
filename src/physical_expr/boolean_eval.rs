@@ -109,8 +109,7 @@ impl PhysicalPredicate {
             PhysicalPredicate::Leaf { primitive } => {
                 match  primitive {
                     Primitives::BitwisePrimitive(b) => {
-                        let tmp = b.evaluate(batch)?
-                        .into_array(0);
+                        let tmp = b.evaluate(batch)?.into_array(0);
                         let res = as_uint64_array(&tmp).unwrap();
                         if is_and {
                             if res.len() == 0 {
@@ -149,7 +148,7 @@ impl PhysicalPredicate {
                     }
                     Primitives::ColumnPrimitive(c) => {
                         if is_and {
-                            let eval_array = c.evaluate(batch)?.into_array(0);
+                            let eval_array = batch.column(c.index());
                             let eval_res = as_uint64_array(&eval_array).unwrap();
                             if eval_res.len() == 0 {
                                 init_v.fill(0);
@@ -160,7 +159,7 @@ impl PhysicalPredicate {
                                 Ok(init_v)
                             }
                         } else {
-                            let eval_array = c.evaluate(batch)?.into_array(0);
+                            let eval_array = batch.column(c.index());
                             let eval_res = as_uint64_array(&eval_array).unwrap();
                             if eval_res.len() == 0 {
                                 Ok(init_v)

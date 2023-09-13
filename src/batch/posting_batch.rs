@@ -1,4 +1,4 @@
-use std::{sync::Arc, ops::Index, collections::{HashMap, BTreeMap}, mem::size_of_val, ptr::NonNull, cell::RefCell, arch::x86_64::{_pext_u64, _blsr_u64}};
+use std::{sync::Arc, ops::Index, collections::BTreeMap, mem::size_of_val, ptr::NonNull, cell::RefCell, arch::x86_64::{_pext_u64, _blsr_u64}, slice::from_raw_parts};
 
 use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type, ToByteSlice}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray, GenericBinaryArray, GenericBinaryBuilder, as_boolean_array, UInt64Array}, record_batch::{RecordBatch, RecordBatchOptions}, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
 use serde::{Serialize, Deserialize};
@@ -111,7 +111,6 @@ impl PostingBatch {
         const CHUNK_SIZE: usize = 8;
         let valid_batch_num = min_range.count_ones() as usize;
         let mut batches: Vec<ArrayRef> = Vec::with_capacity(indices.len());
-        assert_eq!(indices.len(), distris.len());
         for (idx, distri) in indices.into_iter().zip(distris.into_iter()) {
             // To be optimized, we can convert bitvec to BooleanArray
             if idx.is_none() {
@@ -151,7 +150,7 @@ impl PostingBatch {
                 continue;
             };
 
-            let mut valid_batch: Vec<[u64; 8]> =vec![[0; 8]; valid_batch_num];
+            let mut valid_batch: Vec<u64> = vec![0; valid_batch_num * 8];
             let valid_mask = unsafe { _pext_u64(min_range, distri) };
             let mut write_mask = unsafe { _pext_u64(distri, min_range) };
             debug!("valid_mask: {:b}", valid_mask);
@@ -165,29 +164,26 @@ impl PostingBatch {
                     continue
                 }
                 let batch = posting.value(start_idx + i);
-                if batch.len() > 32 {
-                    let batch = unsafe {*(batch.as_ptr() as *const [u64; 8])};
-                    assert!(batch.iter().map(|v| v.count_ones()).sum::<u32>() > 0);
-                    valid_batch[write_pos] = batch;
+                if batch.len() == 64 {
+                    let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u64, 8) };
+                    valid_batch[(write_pos * 8)..(write_pos * 8 + 8)].copy_from_slice(batch);
                 } else {
                     // means this's Integer list
-                    let batch = unsafe {batch.align_to::<u16>().1 };
-                    assert!(batch.len() > 0);
+                    let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u16, batch.len() / 2)};
                     //  means this's bitmap
                     let mut bitmap = [0; CHUNK_SIZE];
                     for off in batch {
                         bitmap[(*off >> 6) as usize] |= 1 << (*off % (1 << 6));
                     }
-                    valid_batch[write_pos] = bitmap;
+                    valid_batch[(write_pos * 8)..(write_pos * 8 + 8)].copy_from_slice(&bitmap);
                 }
                 write_pos = write_mask.trailing_zeros() as usize;
                 write_mask = clear_lowest_set_bit(write_mask);
             }
-            let batch = UInt64Array::from(valid_batch.into_flattened());
+            let batch = UInt64Array::from(valid_batch);
             // info!("fetch true count: {:}", as_boolean_array(&batch).true_count());
             batches.push(Arc::new(batch));
         }
-        // batches.insert(projected_schema.index_of("__id__").expect("Should have __id__ field"), Arc::new(UInt32Array::from_iter_values((self.range.start).. (self.range.start + 32 * self.range.nums32))));
         batches.insert(projected_schema.index_of("__id__").expect("Should have __id__ field"), Arc::new(UInt32Array::from(vec![] as Vec<u32>)));
         
         debug!("end of project fold");
