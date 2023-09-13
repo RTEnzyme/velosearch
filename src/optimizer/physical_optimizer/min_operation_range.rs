@@ -7,7 +7,7 @@ use datafusion::{
     physical_optimizer::PhysicalOptimizerRule, 
     physical_plan::{rewrite::{TreeNodeRewriter, RewriteRecursion, TreeNodeRewritable}, 
     ExecutionPlan, boolean::BooleanExec, PhysicalExpr}, error::DataFusionError, 
-    arrow::{datatypes::Schema, array::{BooleanArray, Array, UInt64Array}, record_batch::RecordBatch}, common::TermMeta,
+    arrow::{datatypes::Schema, array::{Array, UInt64Array}, record_batch::RecordBatch}, common::TermMeta,
 };
 use datafusion::common::Result;
 use tracing::debug;
@@ -107,16 +107,19 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                             projected_schema.clone(),
                             distris,
                         ).unwrap();
-                        Arc::new(
-                            self.predicate.as_ref()
-                            .unwrap()
-                            .evaluate(&batch)
-                            .unwrap()
-                            .into_array(0)
-                            .as_any()
-                            .downcast_ref::<UInt64Array>().unwrap()
-                            .to_owned()
-                        )
+                        debug!("self.predicate: {:?}", self.predicate);
+                        match self.predicate.as_ref() {
+                            Some(p) => Arc::new(
+                                p
+                                .evaluate(&batch)
+                                .unwrap()
+                                .into_array(0)
+                                .as_any()
+                                .downcast_ref::<UInt64Array>().unwrap()
+                                .to_owned()
+                            ),
+                            None => empty_array,
+                        }
                     } else {
                         Arc::new(UInt64Array::from(vec![] as Vec<u64>))
                     }

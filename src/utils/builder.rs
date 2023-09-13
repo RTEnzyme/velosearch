@@ -1,10 +1,10 @@
-use std::{path::PathBuf, collections::{BTreeMap, HashMap}, fs::File, io::{BufReader, BufWriter}, sync::Arc};
+use std::{path::PathBuf, collections::HashMap, fs::File, io::{BufReader, BufWriter}, sync::Arc};
 
 use adaptive_hybrid_trie::TermIdx;
-use datafusion::{arrow::{datatypes::{Schema, Field, DataType}, array::{BooleanArray, UInt64Array}}, common::TermMeta};
+use datafusion::{arrow::{datatypes::{Schema, Field, DataType}, array::UInt64Array}, common::TermMeta};
 use tracing::info;
 
-use crate::{datasources::posting_table::PostingTable, batch::{PostingBatchBuilder, BatchRange, TermMetaBuilder}, utils::array::build_boolean_array};
+use crate::{datasources::posting_table::PostingTable, batch::{PostingBatchBuilder, BatchRange}};
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct TermMetaTemp {

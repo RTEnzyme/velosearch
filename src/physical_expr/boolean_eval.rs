@@ -4,7 +4,6 @@ use datafusion::{physical_plan::{expressions::{BinaryExpr, Column}, PhysicalExpr
 use tracing::{debug, info};
 
 use crate::ShortCircuit;
-use crate::utils::array::build_boolean_array;
 
 #[derive(Clone, Debug)]
 pub enum Primitives {
@@ -255,9 +254,8 @@ impl PhysicalExpr for BooleanEvalExpr {
                 }
             }
         } else {
-            let batch_len = (batch.num_rows() + 7) / 8;
-            let res: Vec<u8> = vec![0; batch_len];
-            Ok(ColumnarValue::Array(Arc::new(build_boolean_array(res, batch_len * 8))))
+            let batch_len = batch.num_rows();
+            Ok(ColumnarValue::Array(Arc::new(UInt64Array::from(vec![0; batch_len]))))
         }
     }
 

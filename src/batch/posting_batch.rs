@@ -136,6 +136,10 @@ impl PostingBatch {
             };
 
             let boundary = &self.boundary[idx];
+            if boundary_idx >= boundary.len() {
+                batches.push(Arc::new(UInt64Array::from(vec![] as Vec<u64>)));
+                continue;
+            }
             let start_idx = boundary[boundary_idx] as usize;
 
             let boundary_len = if boundary_idx < boundary.len() - 1 {
@@ -183,7 +187,9 @@ impl PostingBatch {
             // info!("fetch true count: {:}", as_boolean_array(&batch).true_count());
             batches.push(Arc::new(batch));
         }
-        batches.insert(projected_schema.index_of("__id__").expect("Should have __id__ field"), Arc::new(UInt32Array::from_iter_values((self.range.start).. (self.range.start + 32 * self.range.nums32))));
+        // batches.insert(projected_schema.index_of("__id__").expect("Should have __id__ field"), Arc::new(UInt32Array::from_iter_values((self.range.start).. (self.range.start + 32 * self.range.nums32))));
+        batches.insert(projected_schema.index_of("__id__").expect("Should have __id__ field"), Arc::new(UInt32Array::from(vec![] as Vec<u32>)));
+        
         debug!("end of project fold");
         let option = RecordBatchOptions::new().with_row_count(Some(valid_batch_num * 8));
         Ok(RecordBatch::try_new_with_options(projected_schema, batches, &option)?)

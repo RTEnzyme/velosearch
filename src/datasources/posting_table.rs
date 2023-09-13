@@ -2,7 +2,7 @@ use std::{any::Any, sync::Arc, task::Poll, mem::size_of_val};
 
 use async_trait::async_trait;
 use datafusion::{
-    arrow::{datatypes::{SchemaRef, Schema, Field, DataType}, record_batch::RecordBatch, array::{BooleanArray, as_boolean_array, UInt64Array}, compute::and}, 
+    arrow::{datatypes::{SchemaRef, Schema, Field, DataType}, record_batch::RecordBatch, array::UInt64Array, compute::and}, 
     datasource::TableProvider, 
     logical_expr::TableType, execution::context::SessionState, prelude::Expr, error::{Result, DataFusionError}, 
     physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream, metrics::{ExecutionPlanMetricsSet, MetricsSet}}, common::TermMeta};
@@ -325,7 +325,7 @@ impl Stream for PostingStream {
                     .map(|v| {
                         match v {
                             Some(v) => {
-                                Some(unsafe { v.values().get(self.index).unwrap().clone() })
+                                Some(v.values().get(self.index).unwrap().clone())
                             }
                             None => None
                         }

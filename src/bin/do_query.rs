@@ -20,8 +20,7 @@ async fn main_inner(index_dir: String) -> Result<()> {
     let table_source = provider_as_source(Arc::clone(&provider));
     let tokenizer = TextAnalyzer::from(SimpleTokenizer)
             .filter(RemoveLongFilter::limit(40))
-            .filter(LowerCaser)
-            .filter(Stemmer::default());
+            .filter(LowerCaser);
 
     let stdin = std::io::stdin();
     for line_res in stdin.lines() {
@@ -35,8 +34,10 @@ async fn main_inner(index_dir: String) -> Result<()> {
                 .collect();
             BooleanPredicateBuilder::must(&trim_fields.iter().map(|v| v.as_str()).collect::<Vec<&str>>())?
         } else {
-            let fields: Vec<String> = fields.map(|v| v.to_string()).collect();
-            BooleanPredicateBuilder::should(&fields.iter().map(|v| v.as_str()).collect::<Vec<&str>>())?
+            let trim_fields: Vec<String> = fields
+                .map(|s| tokenizer.token_stream(s).next().unwrap().text.clone())
+                .collect();
+            BooleanPredicateBuilder::should(&trim_fields.iter().map(|v| v.as_str()).collect::<Vec<&str>>())?
         };
         let predicate = predicate.build();
         let index = ctx.boolean_with_provider(table_source.clone(), &schema, predicate, false).await.unwrap();

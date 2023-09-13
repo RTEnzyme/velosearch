@@ -15,7 +15,7 @@ use datafusion::{
         physical_optimizer::PhysicalOptimizerRule
     };
 use futures::{future::BoxFuture, FutureExt};
-use tracing::{debug, trace, info};
+use tracing::{debug, trace};
 
 use crate::{physical_expr::{boolean_eval::{PhysicalPredicate, Primitives, SubPredicate}, BooleanEvalExpr}, datasources::posting_table::PostingExec};
 
