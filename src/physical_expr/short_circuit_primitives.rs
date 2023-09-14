@@ -1,9 +1,9 @@
-use std::{any::Any, ptr::NonNull, sync::Arc};
+use std::{any::Any, ptr::NonNull, sync::Arc, arch::x86_64::{__m512i, _mm512_loadu_epi64}};
 
 use datafusion::{physical_plan::{PhysicalExpr, ColumnarValue}, arrow::{datatypes::DataType, record_batch::RecordBatch, array::{BooleanArray, ArrayData}, buffer::Buffer}, error::DataFusionError};
 use tracing::debug;
 
-use crate::{jit::{ast::{Predicate, Boolean}, jit_short_circuit, AOT_PRIMITIVES}, JIT_MAX_NODES};
+use crate::{jit::{ast::{Predicate, Boolean}, jit_short_circuit, AOT_PRIMITIVES}, JIT_MAX_NODES, utils::avx512::U64x8};
 use crate::utils::Result;
 
 use super::{boolean_eval::PhysicalPredicate, Primitives};
@@ -71,6 +71,33 @@ impl ShortCircuit {
         let mut res: Vec<u8> = vec![0; batch_len];
         (self.primitive)(batch.as_ptr(), init_v.as_ptr(), res.as_mut_ptr(), batch_len as i64);
         res
+    }
+
+    pub fn eval_avx512(&self, init_v: Option<Vec<__m512i>>, batch: &Vec<Option<Vec<__m512i>>>) -> Vec<__m512i> {
+        let batch_len = batch[self.batch_idx[0]].as_ref().unwrap().len();
+        let batches: Vec<*const u8> = self.batch_idx
+            .iter()
+            .map(|v| {
+                batch[*v].as_ref().unwrap().as_ptr() as *const u8
+            })
+            .collect();
+
+        let mut res: Vec<u64> = Vec::with_capacity(batch_len * 8);
+        let init = match init_v {
+            Some(i) => i.as_ptr() as *const u8,
+            None => batches[0],
+        };
+        (self.primitive)(
+            batches.as_ptr(),
+            init,
+            res.as_mut_ptr() as *mut u8,
+            batch_len as i64 * 512,
+        );
+        (0..batch_len).into_iter()
+        .map(|v| {
+            unsafe { _mm512_loadu_epi64(res.as_ptr().add(v * 8) as *const i64)}
+        })
+        .collect()
     }
 }
 

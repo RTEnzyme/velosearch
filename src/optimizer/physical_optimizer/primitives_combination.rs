@@ -6,7 +6,7 @@ use std::sync::Arc;
 use datafusion::{physical_optimizer::PhysicalOptimizerRule, physical_plan::{ExecutionPlan, boolean::BooleanExec, rewrite::TreeNodeRewritable}};
 use tracing::debug;
 
-use crate::{physical_expr::{BooleanEvalExpr, boolean_eval::{PhysicalPredicate, SubPredicate}, Primitives}, JIT_MAX_NODES, ShortCircuit};
+use crate::{physical_expr::{BooleanEvalExpr, boolean_eval::{PhysicalPredicate, SubPredicate}, Primitives}, JIT_MAX_NODES, ShortCircuit, datasources::posting_table::PostingExec};
 
 /// PrimitivesCombination optimizer that optimizes the combination of 
 /// bitwise primitives and short-circuit primitive.
@@ -27,10 +27,10 @@ impl PhysicalOptimizerRule for PrimitivesCombination {
         _config: &datafusion::config::ConfigOptions,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         plan.transform_down(&|plan| {
-            if let Some(boolean) = plan.as_any().downcast_ref::<BooleanExec>() {
-                let boolean_eval = boolean.predicate[&0].clone();
-                let boolean_eval = boolean_eval.as_any().downcast_ref::<BooleanEvalExpr>();
-                match boolean_eval {
+            if let Some(boolean) = plan.as_any().downcast_ref::<PostingExec>() {
+                // let boolean_eval = boolean.predicate[&0].clone();
+                // let boolean_eval = boolean_eval.as_any().downcast_ref::<BooleanEvalExpr>();
+                match &boolean.predicate {
                     Some(p) => {
                         if let Some(ref predicate) = p.predicate {
                             let predicate = predicate.get();

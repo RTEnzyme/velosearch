@@ -1,6 +1,6 @@
 use std::arch::x86_64::{_mm512_setzero_si512, _mm512_loadu_si512, _mm512_popcnt_epi64, _mm512_add_epi64, _mm512_reduce_add_epi64};
 
-use datafusion::{physical_plan::Accumulator, error::Result, scalar::ScalarValue, arrow::{array::{ArrayRef, Int64Array, as_boolean_array}, compute::sum}, common::{downcast_value, DataFusionError}};
+use datafusion::{physical_plan::Accumulator, error::Result, scalar::ScalarValue, arrow::{array::{ArrayRef, Int64Array, as_boolean_array}, compute::sum}, common::{downcast_value, DataFusionError, cast::as_uint64_array}};
 use tracing::{debug, info};
 
 
@@ -24,7 +24,8 @@ impl Accumulator for CountValid {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = &values[0];
-        let count = avx512_vpopcnt(array.data().buffers()[0].as_slice()) as i64;
+        // let count = avx512_vpopcnt(array.data().buffers()[0].as_slice()) as i64;
+        let count = as_uint64_array(array).unwrap().value(0) as i64;
         debug!("update count: {:?}", count);
         self.count += count;
         Ok(())

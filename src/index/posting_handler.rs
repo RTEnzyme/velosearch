@@ -122,7 +122,7 @@ impl HandlerT for PostingHandler {
                 // let predicate = BooleanPredicateBuilder::must(&["hot", "spring", "south", "dakota"]).unwrap();
                 // let predicate = BooleanPredicateBuilder::must(&["civil", "war", "battlefield"]).unwrap();
                 let timer = Instant::now();
-                let predicates = ["the", "book", "of", "life"];
+                let predicates = ["canon", "powershot"];
                 let predicate: Vec<String> = predicates
                     .into_iter()
                     .map(|w| {

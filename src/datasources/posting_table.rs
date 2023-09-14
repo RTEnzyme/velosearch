@@ -11,7 +11,7 @@ use adaptive_hybrid_trie::TermIdx;
 use serde::{Serialize, ser::SerializeStruct};
 use tracing::{debug, info};
 
-use crate::batch::{PostingBatch, BatchRange};
+use crate::{batch::{PostingBatch, BatchRange}, physical_expr::BooleanEvalExpr};
 
 pub struct PostingTable {
     schema: SchemaRef,
@@ -100,7 +100,7 @@ impl TableProvider for PostingTable {
         &self,
         _state: &SessionState,
         projection: Option<&Vec<usize>>,
-        _filters: &[Expr],
+        filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         debug!("PostingTable scan");
@@ -125,6 +125,7 @@ pub struct PostingExec {
     pub partition_min_range: Option<Vec<Arc<UInt64Array>>>,
     pub is_score: bool,
     pub projected_term_meta: Vec<Option<TermMeta>>,
+    pub predicate: Option<BooleanEvalExpr>,
     metric: ExecutionPlanMetricsSet,
 }
 
@@ -189,6 +190,7 @@ impl ExecutionPlan for PostingExec {
             self.partition_min_range.as_ref().unwrap()[partition].clone(),
             distris,
             indices,
+            self.predicate.clone(),
             self.is_score,
         )?))
     }
@@ -201,9 +203,10 @@ impl ExecutionPlan for PostingExec {
         match t {
             DisplayFormatType::Default => {
                 write!(f,
-                    "PostingExec: partition_size={:?}, is_score: {:}",
+                    "PostingExec: partition_size={:?}, is_score: {:}, predicate: {:?}",
                     self.partitions.len(),
                     self.is_score,
+                    self.predicate,
                 )
             }
         }
@@ -245,6 +248,7 @@ impl PostingExec {
             partition_min_range,
             is_score: false,
             projected_term_meta,
+            predicate: None,
             metric: ExecutionPlanMetricsSet::new(),
         })
     }
@@ -281,6 +285,8 @@ pub struct PostingStream {
     indices: Vec<Option<u32>>,
     /// index the bucket
     index: usize,
+    /// 
+    predicate: Option<BooleanEvalExpr>,
 }
 
 impl PostingStream {
@@ -291,6 +297,7 @@ impl PostingStream {
         min_range: Arc<UInt64Array>,
         distris: Vec<Option<Arc<UInt64Array>>>,
         indices: Vec<Option<u32>>,
+        predicate: Option<BooleanEvalExpr>,
         is_score: bool,
     ) -> Result<Self> {
         debug!("Try new a PostingStream");
@@ -301,6 +308,7 @@ impl PostingStream {
             distris,
             is_score,
             indices,
+            predicate,
             index: 0,
         })
     }
@@ -314,7 +322,7 @@ impl Stream for PostingStream {
             if self.index >= self.min_range.len() {
                 return Poll::Ready(None);
             }
-            if ! self.is_score {
+            if true {
                 let min_range = self.min_range.values().get(self.index).unwrap().clone();
                 debug!("min_range: {:b}", min_range);
                 if min_range == 0 {
@@ -331,8 +339,21 @@ impl Stream for PostingStream {
                         }
                     })
                     .collect();
-                let batch = self.posting_lists.project_fold(&self.indices, self.schema.clone(), &distris, self.index, min_range).unwrap();
+                let batch = self.posting_lists.project_with_predicate(
+                    &self.indices,
+                    self.schema.clone(),
+                    &distris,
+                    self.index,
+                    min_range,
+                    self.predicate.as_ref().unwrap(),
+                ).unwrap();
                 self.index += 1;
+                let batch = RecordBatch::try_new(
+                    Arc::new(Schema::new(vec![Field::new("mask", DataType::UInt64, false)])),
+                    vec![
+                        Arc::new(UInt64Array::from(vec![batch as u64])),
+                    ]
+                )?;
 
                 return Poll::Ready(Some(Ok(batch)));
             } else {

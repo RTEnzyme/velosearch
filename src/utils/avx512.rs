@@ -1,8 +1,8 @@
 use std::arch::x86_64::{_mm512_and_epi64, __m512i, _mm512_or_epi64, _mm512_loadu_epi64};
 
-union U64x8 {
-    vector: __m512i,
-    vals: [u64; 8],
+pub union U64x8 {
+    pub vector: __m512i,
+    pub vals: [u64; 8],
 }
 
 pub fn avx512_bitwise_and(lhs: &mut [u64], rhs: &[u64]) {

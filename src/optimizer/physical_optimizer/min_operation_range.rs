@@ -12,7 +12,7 @@ use datafusion::{
 use datafusion::common::Result;
 use tracing::debug;
 
-use crate::datasources::posting_table::PostingExec;
+use crate::{datasources::posting_table::PostingExec, physical_expr::BooleanEvalExpr};
 
 /// Optimizer rule that get the minimal valid range of CNF predicate
 #[derive(Default)]
@@ -141,17 +141,20 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
     fn mutate(&mut self, node: Arc<dyn ExecutionPlan>) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         if let Some(boolean) = node.as_any().downcast_ref::<BooleanExec>() {
             debug!("Mutate BooleanExec");
-            let term_stats = match self.partition_stats.take() {
-                Some(s) => s,
-                None => return Err(DataFusionError::Internal(format!("Term_stats shouldn't be null"))),
-            };
+            // let term_stats = match self.partition_stats.take() {
+            //     Some(s) => s,
+            //     None => return Err(DataFusionError::Internal(format!("Term_stats shouldn't be null"))),
+            // };
             
-            Ok(Arc::new(BooleanExec::try_new(
-                boolean.predicate.to_owned(),
-                boolean.input().clone(),
-                Some(term_stats),
-                boolean.is_score,
-            )?))
+            // Ok(Arc::new(BooleanExec::try_new(
+            //     boolean.predicate.to_owned(),
+            //     boolean.input().clone(),
+            //     Some(term_stats),
+            //     boolean.is_score,
+            // )?))
+            Ok(
+                boolean.input.clone()
+            )
         } else if let Some(posting) = node.as_any().downcast_ref::<PostingExec>() {
             debug!("Mutate PostingExec");
             let min_range = self.min_range.take();
@@ -159,8 +162,16 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
             exec.partition_min_range = min_range;
             debug!("is_score: {}", self.is_score);
             exec.is_score = self.is_score;
+            exec.predicate = Some(self.predicate
+                .take()
+                .unwrap()
+                .as_any()
+                .downcast_ref::<BooleanEvalExpr>()
+                .unwrap()
+                .clone()
+            );
             let exec = Arc::new(exec);
-            Ok(exec.clone())
+            Ok(exec)
         }else {
             Ok(node)
         }

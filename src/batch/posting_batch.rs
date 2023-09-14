@@ -1,9 +1,9 @@
-use std::{sync::Arc, ops::Index, collections::BTreeMap, mem::size_of_val, ptr::NonNull, cell::RefCell, arch::x86_64::{_pext_u64, _blsr_u64}, slice::from_raw_parts};
+use std::{sync::Arc, ops::Index, collections::BTreeMap, mem::size_of_val, ptr::NonNull, cell::RefCell, arch::x86_64::{_pext_u64, _blsr_u64, __m512i, _mm512_loadu_epi64, _mm512_popcnt_epi64, _mm512_reduce_add_epi64, _mm512_setzero_si512, _mm512_add_epi64}, slice::from_raw_parts};
 
-use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type, ToByteSlice}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray, GenericBinaryArray, GenericBinaryBuilder, as_boolean_array, UInt64Array}, record_batch::{RecordBatch, RecordBatchOptions}, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
+use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type, ToByteSlice}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray, GenericBinaryArray, GenericBinaryBuilder, as_boolean_array, UInt64Array}, record_batch::{RecordBatch, RecordBatchOptions}, buffer::Buffer}, from_slice::FromSlice, common::TermMeta, physical_plan::PhysicalExpr};
 use serde::{Serialize, Deserialize};
 use tracing::{debug, info};
-use crate::utils::{Result, FastErr};
+use crate::{utils::{Result, FastErr}, physical_expr::BooleanEvalExpr};
 
 
 /// The doc_id range [start, end) Batch range determines the  of relevant batch.
@@ -131,6 +131,7 @@ impl PostingBatch {
                     ))
                 })?
             } else {
+                batches.push(Arc::new(UInt64Array::from(vec![] as Vec<u64>)));
                 continue;
             };
 
@@ -189,6 +190,84 @@ impl PostingBatch {
         debug!("end of project fold");
         let option = RecordBatchOptions::new().with_row_count(Some(valid_batch_num * 8));
         Ok(RecordBatch::try_new_with_options(projected_schema, batches, &option)?)
+    }
+
+    pub fn project_with_predicate(
+        &self,
+        indices: &[Option<u32>],
+        _projected_schema: SchemaRef,
+        distris: &[Option<u64>],
+        boundary_idx: usize,
+        min_range: u64,
+        predicate: &BooleanEvalExpr,
+    ) -> Result<usize> {
+        let empty = unsafe { _mm512_setzero_si512() };
+        
+        let predicate = predicate.predicate.as_ref().unwrap().get();
+        let predicate_ref = unsafe {predicate.as_ref().unwrap() };
+        let valid_num = min_range.count_ones() as usize;
+        let mut batches: Vec<Option<Vec<__m512i>>> = vec![None; indices.len()];
+        for (j, index) in indices.iter().enumerate() {
+            let distri = unsafe { distris.get_unchecked(j).unwrap_unchecked() };
+            let mut write_mask = unsafe { _pext_u64(min_range, distri ) };
+            let valid_mask = unsafe { _pext_u64(distri, min_range) };
+            let idx = unsafe { index.unwrap_unchecked() as usize };
+            let bucket = if idx != usize::MAX {
+                self.postings.get(idx).cloned().ok_or_else(|| {
+                    FastErr::InternalErr(format!(
+                        "project index {} out of bounds, max field {}",
+                        idx,
+                        self.postings.len()
+                    ))
+                })?
+            } else {
+                continue;
+            };
+            let boundary = &self.boundary[idx];
+            if boundary_idx >= boundary.len() {
+                continue;
+            }
+            let start_idx = boundary[boundary_idx] as usize;
+            let mut posting = Vec::with_capacity(valid_num);
+            for i in 0..valid_num {
+                if valid_mask & (1 << i) != 0 {
+                    let pos = write_mask.trailing_zeros() as usize;
+                    write_mask = clear_lowest_set_bit(write_mask);
+                    let batch = bucket.value(start_idx + pos);
+                    if batch.len() == 64 {
+                        let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u64, 8) };
+                        posting.push(unsafe { _mm512_loadu_epi64(batch.as_ptr() as *const i64) });
+                    } else {
+                        // means this's Integer list
+                        let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u16, batch.len() / 2)};
+                        //  means this's bitmap
+                        let mut bitmap: [u64; 8] = [0; 8];
+                        for off in batch {
+                            bitmap[(*off >> 6) as usize] |= 1 << (*off % (1 << 6));
+                        }
+                        posting.push(unsafe { _mm512_loadu_epi64(bitmap.as_ptr() as *const i64)});
+                    }
+                } else {
+                    posting.push(empty);
+                }
+            }
+            batches[j] = Some(posting);
+        }
+        let eval = predicate_ref.eval_avx512(&batches, None, true)?;
+        // batches.clear();
+        if let Some(e) = eval {
+            let mut accumulator = unsafe { _mm512_setzero_si512() };
+            e.into_iter()
+            .for_each(|v| unsafe {
+                let popcnt = _mm512_popcnt_epi64(v);
+                accumulator = _mm512_add_epi64(accumulator, popcnt);
+            });
+            let sum = unsafe { _mm512_reduce_add_epi64(accumulator) } as usize;
+            debug!("sum: {:}", sum);
+            Ok(sum)
+        } else {
+            Ok(0)
+        }
     }
 
     pub fn project_fold_with_freqs(

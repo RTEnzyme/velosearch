@@ -1,4 +1,4 @@
-use std::{sync::Arc, any::Any, cell::SyncUnsafeCell};
+use std::{sync::Arc, any::Any, cell::SyncUnsafeCell, arch::x86_64::{__m512i, _mm512_and_epi64, _mm512_or_epi64}};
 
 use datafusion::{physical_plan::{expressions::{BinaryExpr, Column}, PhysicalExpr, ColumnarValue}, arrow::{datatypes::{Schema, DataType}, record_batch::RecordBatch, array::{as_boolean_array, UInt64Array}}, error::DataFusionError, common::{Result, cast::as_uint64_array}};
 use tracing::{debug, info};
@@ -91,6 +91,83 @@ pub enum PhysicalPredicate {
 }
 
 impl PhysicalPredicate {
+    pub fn eval_avx512(&self, batch: &Vec<Option<Vec<__m512i>>>, init_v: Option<Vec<__m512i>>, is_and: bool) -> Result<Option<Vec<__m512i>>> {
+        let mut init_v = init_v;
+        match self {
+            PhysicalPredicate::And { args } => {
+                for predicate in args {
+                    init_v = predicate.sub_predicate.eval_avx512(&batch, init_v, true)?;
+                }
+                Ok(init_v)
+            }
+            PhysicalPredicate::Or { args } => {
+                for predicate in args {
+                    init_v = predicate.sub_predicate.eval_avx512(&batch, init_v, false)?;
+                }
+                Ok(init_v)
+            }
+            PhysicalPredicate::Leaf { primitive } => {
+                match primitive {
+                    Primitives::BitwisePrimitive(_b) => {
+                        todo!()
+                    }
+                    Primitives::ShortCircuitPrimitive(s) => {
+                        if is_and {
+                            Ok(Some(s.eval_avx512(init_v, &batch)))
+                        } else {
+                            let eval = s.eval_avx512(None, &batch);
+                            match init_v {
+                                Some(e) => {
+                                    let eval = e.into_iter()
+                                    .zip(eval.into_iter())
+                                    .map(|(a, b)| unsafe { _mm512_or_epi64(a, b) })
+                                    .collect();
+                                    Ok(Some(eval))
+                                }
+                                None => Ok(None)
+                            }
+                        }
+                    }
+                    Primitives::ColumnPrimitive(c) => {
+                        if is_and {
+                            let eval_array = &batch[c.index()];
+                            match (init_v, eval_array) {
+                                (Some(e), Some(i)) => {
+                                    let eval = e
+                                        .into_iter()
+                                        .zip(i.into_iter())
+                                        .map(|(a, b)| {
+                                            unsafe { _mm512_and_epi64(a, *b) }
+                                        })
+                                        .collect();
+                                    Ok(Some(eval))
+                                }
+                                (_, Some(i)) => Ok(Some(i.clone())),
+                                (_, _) => Ok(None)
+                            }
+                        } else {
+                            let eval_array = &batch[c.index()];
+                            match (eval_array, init_v) {
+                                (Some(e), Some(i)) => {
+                                    let eval = e
+                                        .into_iter()
+                                        .zip(i.into_iter())
+                                        .map(|(a, b)| {
+                                            unsafe { _mm512_or_epi64(*a, b) }
+                                        })
+                                        .collect();
+                                    Ok(Some(eval))
+                                }
+                                (_, Some(b)) => Ok(Some(b)),
+                                (_, _) => Ok(None),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+    }
     fn eval(&self, batch: &RecordBatch, init_v: Vec<u64>, is_and: bool) -> Result<Vec<u64>> {
         let mut init_v = init_v;
         match self {
