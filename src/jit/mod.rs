@@ -15,24 +15,24 @@ use self::compile::jit_short_circuit_primitive;
 
 lazy_static!{
     pub static ref AOT_PRIMITIVES: HashMap<u32, fn(*const *const u8, *const u8, *mut u8, i64)> = {
-        if let Ok(f) = File::open("aot.bin") {
-            info!("Loud AOT functions from `aot.bin`");
-            let reader = std::io::BufReader::new(f);
-            let aot_map: HashMap<u32, Vec<u8>> = bincode::deserialize_from(reader).unwrap();
-            aot_map.into_iter()
-            .map(|(k, v)| {
-                let func = {
-                    let ptr = v.as_ptr();
-                    let code_fn = unsafe {
-                        core::mem::transmute::<_, fn(*const *const u8, *const u8, *mut u8, i64)->()>(ptr)
-                    };
-                    std::mem::forget(v);
-                    code_fn
-                };
-                (k, func)
-            })
-            .collect()
-        } else {
+        // if let Ok(f) = File::open("aot3.bin") {
+        //     info!("Loud AOT functions from `aot.bin`");
+        //     let reader = std::io::BufReader::new(f);
+        //     let aot_map: HashMap<u32, Vec<u8>> = bincode::deserialize_from(reader).unwrap();
+        //     aot_map.into_iter()
+        //     .map(|(k, v)| {
+        //         let func = {
+        //             let ptr = v.leak() as &'static mut [u8];
+        //             let ptr = ptr.as_ptr();
+        //             let code_fn = unsafe {
+        //                 core::mem::transmute::<_, fn(*const *const u8, *const u8, *mut u8, i64)->()>(ptr)
+        //             };
+        //             code_fn
+        //         };
+        //         (k, func)
+        //     })
+        //     .collect()
+        // } else {
             info!("start AOT compilation");
             let mut map = HashMap::new();
             for n in 2..JIT_MAX_NODES {
@@ -51,7 +51,7 @@ lazy_static!{
                     }
                 }
             }
-            let file = File::create("aot.bin").expect("Unable to create file.");
+            let file = File::create("aot3.bin").expect("Unable to create file.");
             let writer = std::io::BufWriter::new(file);
             bincode::serialize_into(writer, &map).expect("Unable to serialize data");
             map.into_iter()
@@ -67,7 +67,7 @@ lazy_static!{
                 (k, func)
             })
             .collect()
-        }
+        // }
     };
 }
 
@@ -193,5 +193,31 @@ mod test {
         // .for_each(|v| {
         //     println!("{:b}", v);
         // });
+    }
+
+    #[test]
+    fn test_aot_res() {
+        // allocate memory for result
+        let test1 = vec![0x31, 0x0];
+        let test2 = vec![0x11, 0x23];
+        let test3 = vec![0x21, 0xFF];
+        let test4 = vec![0x21, 0x12];
+        let init_v: Vec<u8> = vec![u8::MAX, 2];
+        let batch = vec![
+            test1.as_ptr(),
+            test2.as_ptr(),
+            test3.as_ptr(),
+            test4.as_ptr(),
+        ];
+        let mut res: Vec<u8> = vec![0; 2];
+
+        let func = AOT_PRIMITIVES[&0b1000000000000000100000000000000];
+        func(
+            batch.as_ptr(),
+            res.as_ptr(),
+            res.as_mut_ptr(),
+            2,
+        );
+        println!("res: {:?}", res);
     }
 }

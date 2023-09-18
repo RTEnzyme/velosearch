@@ -4,6 +4,7 @@
 #![feature(is_sorted)]
 #![feature(sync_unsafe_cell)]
 #![feature(slice_flatten)]
+#![feature(ptr_metadata)]
 
 extern crate datafusion;
 

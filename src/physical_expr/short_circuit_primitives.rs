@@ -46,7 +46,7 @@ impl ShortCircuit {
             let mut builder = LoudsBuilder::new(node_num);
             predicate_2_louds(cnf, &mut builder);
             let louds = builder.build();
-            debug!("louds: {:?}", louds);
+            debug!("louds: {:b}", louds);
             let primitive = AOT_PRIMITIVES[&louds];
             let batch_idx = convert_predicate(&cnf).1;
             return Self {
@@ -74,25 +74,33 @@ impl ShortCircuit {
     }
 
     pub fn eval_avx512(&self, init_v: Option<Vec<__m512i>>, batch: &Vec<Option<Vec<__m512i>>>) -> Vec<__m512i> {
+        debug!("Eval by short_circuit_primitives");
         let batch_len = batch[self.batch_idx[0]].as_ref().unwrap().len();
-        let batches: Vec<*const u8> = self.batch_idx
+        let mut batches: Vec<*const u8> = self.batch_idx
             .iter()
             .map(|v| {
                 batch[*v].as_ref().unwrap().as_ptr() as *const u8
             })
             .collect();
 
-        let mut res: Vec<u64> = Vec::with_capacity(batch_len * 8);
+        let mut res: Vec<u64> = vec![0; batch_len * 8];
         let init = match init_v {
             Some(i) => i.as_ptr() as *const u8,
             None => batches[0],
         };
-        (self.primitive)(
-            batches.as_ptr(),
-            init,
-            res.as_mut_ptr() as *mut u8,
-            batch_len as i64 * 512,
-        );
+        for i in 0..(batch_len as isize) {
+            batches.iter_mut().for_each(|v| *v = unsafe { v.offset(64) });
+            unsafe {
+                (self.primitive)(
+                    batches.as_ptr(),
+                    init.offset(i * 64),
+                    res.as_mut_ptr().offset(i * 8) as *mut u8,
+                    64,
+                );
+            }
+        }
+        
+        debug!("end eval");
         (0..batch_len).into_iter()
         .map(|v| {
             unsafe { _mm512_loadu_epi64(res.as_ptr().add(v * 8) as *const i64)}

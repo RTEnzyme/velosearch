@@ -1,8 +1,9 @@
-use std::{sync::Arc, ops::Index, collections::BTreeMap, mem::size_of_val, ptr::NonNull, cell::RefCell, arch::x86_64::{_pext_u64, _blsr_u64, __m512i, _mm512_loadu_epi64, _mm512_popcnt_epi64, _mm512_reduce_add_epi64, _mm512_setzero_si512, _mm512_add_epi64}, slice::from_raw_parts};
+use std::{sync::Arc, ops::Index, collections::BTreeMap, mem::size_of_val, ptr::NonNull, cell::RefCell, arch::x86_64::{_pext_u64, _blsr_u64, __m512i, _mm512_loadu_epi64, _mm512_popcnt_epi64, _mm512_reduce_add_epi64, _mm512_setzero_si512, _mm512_add_epi64, _mm512_mask_compressstoreu_epi16, _mm512_loadu_epi16, _mm512_loadu_epi8, _mm512_mask_compressstoreu_epi8}, slice::from_raw_parts};
 
 use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type, ToByteSlice}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray, GenericBinaryArray, GenericBinaryBuilder, as_boolean_array, UInt64Array}, record_batch::{RecordBatch, RecordBatchOptions}, buffer::Buffer}, from_slice::FromSlice, common::TermMeta, physical_plan::PhysicalExpr};
 use serde::{Serialize, Deserialize};
 use tracing::{debug, info};
+use lazy_static::lazy_static;
 use crate::{utils::{Result, FastErr}, physical_expr::BooleanEvalExpr};
 
 
@@ -39,6 +40,18 @@ impl BatchRange {
 pub type PostingList = GenericBinaryArray<i32>;
 pub type TermSchemaRef = SchemaRef;
 pub type BatchFreqs = Vec<Arc<GenericListArray<i32>>>;
+
+const COMPRESS_INDEX: [u8; 64] =  [
+        0, 1, 2, 3, 4, 5, 6, 7,
+        8, 9, 10, 11, 12, 13, 14, 15,
+        16, 17, 18, 19, 20, 21, 22, 23,
+        24, 25, 26, 27, 28, 29, 30, 31,
+        32, 33, 34, 35, 36, 37, 38, 39,
+        40, 41, 42, 43, 44, 45, 46, 47,
+        48, 49, 50, 51, 52, 53, 54, 55,
+        56, 57, 58, 59, 60, 61, 62, 63,
+    ];
+
 
 /// A batch of Postinglist which contain serveral terms,
 /// which is in range[start, end)
@@ -154,9 +167,6 @@ impl PostingBatch {
             let mut valid_batch: Vec<u64> = vec![0; valid_batch_num * 8];
             let valid_mask = unsafe { _pext_u64(min_range, distri) };
             let mut write_mask = unsafe { _pext_u64(distri, min_range) };
-            debug!("valid_mask: {:b}", valid_mask);
-            debug!("distri: {:b}", distri);
-            debug!("write_mask: {:b}", write_mask);
 
             let mut write_pos = write_mask.trailing_zeros() as usize;
             write_mask = clear_lowest_set_bit(write_mask);
@@ -201,58 +211,18 @@ impl PostingBatch {
         min_range: u64,
         predicate: &BooleanEvalExpr,
     ) -> Result<usize> {
-        let empty = unsafe { _mm512_setzero_si512() };
         
         let predicate = predicate.predicate.as_ref().unwrap().get();
         let predicate_ref = unsafe {predicate.as_ref().unwrap() };
         let valid_num = min_range.count_ones() as usize;
-        let mut batches: Vec<Option<Vec<__m512i>>> = vec![None; indices.len()];
-        for (j, index) in indices.iter().enumerate() {
-            let distri = unsafe { distris.get_unchecked(j).unwrap_unchecked() };
-            let mut write_mask = unsafe { _pext_u64(min_range, distri ) };
-            let valid_mask = unsafe { _pext_u64(distri, min_range) };
-            let idx = unsafe { index.unwrap_unchecked() as usize };
-            let bucket = if idx != usize::MAX {
-                self.postings.get(idx).cloned().ok_or_else(|| {
-                    FastErr::InternalErr(format!(
-                        "project index {} out of bounds, max field {}",
-                        idx,
-                        self.postings.len()
-                    ))
-                })?
-            } else {
-                continue;
-            };
-            let boundary = &self.boundary[idx];
-            if boundary_idx >= boundary.len() {
-                continue;
-            }
-            let start_idx = boundary[boundary_idx] as usize;
-            let mut posting = Vec::with_capacity(valid_num);
-            for i in 0..valid_num {
-                if valid_mask & (1 << i) != 0 {
-                    let pos = write_mask.trailing_zeros() as usize;
-                    write_mask = clear_lowest_set_bit(write_mask);
-                    let batch = bucket.value(start_idx + pos);
-                    if batch.len() == 64 {
-                        let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u64, 8) };
-                        posting.push(unsafe { _mm512_loadu_epi64(batch.as_ptr() as *const i64) });
-                    } else {
-                        // means this's Integer list
-                        let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u16, batch.len() / 2)};
-                        //  means this's bitmap
-                        let mut bitmap: [u64; 8] = [0; 8];
-                        for off in batch {
-                            bitmap[(*off >> 6) as usize] |= 1 << (*off % (1 << 6));
-                        }
-                        posting.push(unsafe { _mm512_loadu_epi64(bitmap.as_ptr() as *const i64)});
-                    }
-                } else {
-                    posting.push(empty);
-                }
-            }
-            batches[j] = Some(posting);
-        }
+        
+        let batches = self.process_dense_bucket(
+                                                    indices,
+                                                    distris,
+                                                    min_range,
+                                                    boundary_idx,
+                                                    valid_num,
+                                                )?;
         let eval = predicate_ref.eval_avx512(&batches, None, true)?;
         // batches.clear();
         if let Some(e) = eval {
@@ -268,6 +238,68 @@ impl PostingBatch {
         } else {
             Ok(0)
         }
+    }
+
+    #[inline]
+    fn process_dense_bucket(&self, indices: &[Option<u32>], distris: &[Option<u64>], min_range: u64, boundary_idx: usize, valid_num: usize) -> Result<Vec<Option<Vec<__m512i>>>> {
+        let empty = unsafe { _mm512_setzero_si512() };
+        let mut batches: Vec<Option<Vec<__m512i>>> = vec![None; indices.len()];
+        let compress_index = unsafe {
+            _mm512_loadu_epi8(COMPRESS_INDEX.as_ptr() as *const i8)
+        };
+        for (j, index) in indices.iter().enumerate() {
+            let distri = unsafe { distris.get_unchecked(j).unwrap_unchecked() };
+            let write_mask = unsafe { _pext_u64(min_range, distri ) };
+            let valid_mask = unsafe { _pext_u64(distri, min_range) };
+
+            let idx = unsafe { index.unwrap_unchecked() as usize };
+
+            let bucket = if idx != usize::MAX {
+                self.postings.get(idx).cloned().ok_or_else(|| {
+                    FastErr::InternalErr(format!(
+                        "project index {} out of bounds, max field {}",
+                        idx,
+                        self.postings.len()
+                    ))
+                })?
+            } else {
+                continue;
+            };
+
+            let boundary = &self.boundary[idx];
+            if boundary_idx >= boundary.len() {
+                continue;
+            }
+            let start_idx = boundary[boundary_idx] as usize;
+            let mut posting = vec![empty; valid_num];
+
+
+            let mut write_index: Vec<u8> = vec![0; valid_num];
+            let mut posting_index: Vec<u8> = vec![0; valid_num];
+            unsafe {
+                _mm512_mask_compressstoreu_epi8(write_index.as_mut_ptr() as *mut u8, valid_mask, compress_index);
+                _mm512_mask_compressstoreu_epi8(posting_index.as_mut_ptr() as *mut u8, write_mask, compress_index);
+            }
+
+            for (w, p) in write_index.into_iter().zip(posting_index.into_iter()){
+                let batch = bucket.value(start_idx + p as usize);
+                if batch.len() == 64 {
+                    let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u64, 8) };
+                    posting[w as usize] = unsafe { _mm512_loadu_epi64(batch.as_ptr() as *const i64) };
+                } else {
+                    // means this's Integer list
+                    let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u16, batch.len() / 2)};
+                    //  means this's bitmap
+                    let mut bitmap: [u64; 8] = [0; 8];
+                    for off in batch {
+                        bitmap[(*off >> 6) as usize] |= 1 << (*off % (1 << 6));
+                    }
+                    posting[w as usize] = unsafe { _mm512_loadu_epi64(bitmap.as_ptr() as *const i64)};
+                }
+            }
+            batches[j] = Some(posting);
+        }
+        Ok(batches)
     }
 
     pub fn project_fold_with_freqs(
@@ -364,6 +396,8 @@ impl PostingBatch {
             .map(|(index, _)| self.postings[index].as_ref())
     }
 }
+
+
 
 impl Index<&str> for PostingBatch {
     type Output = PostingList;
@@ -618,6 +652,30 @@ mod test {
     // use datafusion::{arrow::{datatypes::{Schema, Field, DataType, UInt8Type}, array::{UInt16Array, BooleanArray, GenericListArray, ArrayRef}}, from_slice::FromSlice};
 
     // use super::{BatchRange, PostingBatch};
+
+    use std::{ptr::{self, from_raw_parts}, arch::x86_64::{_mm512_mask_compressstoreu_epi16, __mmask32, _mm512_loadu_epi16, __mmask64, _mm512_loadu_epi8, _mm512_mask_compressstoreu_epi8}};
+
+    use crate::batch::posting_batch::COMPRESS_INDEX;
+
+    #[test]
+    fn test_ptr() {
+        // let val: [u64; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+        // println!("{:?}", ptr::metadata(val.as_slic8e() as *const [u64]));
+        println!("{:}", std::mem::size_of::<Option<&[u8]>>())
+    }
+
+    #[test]
+    fn test_compress() {
+        let data = unsafe {
+            _mm512_loadu_epi8(COMPRESS_INDEX.as_ptr() as *const i8)
+        };
+        println!("{:?}", data);
+        let mut res: Vec<u8> = vec![0; 64];
+        unsafe {
+            _mm512_mask_compressstoreu_epi8(res.as_mut_ptr() as *mut u8, u64::MAX as __mmask64, data);
+        }
+        println!("{:?}", res);
+    }
 
     // fn build_batch() -> PostingBatch {
     //     let schema = Arc::new(Schema::new(vec![

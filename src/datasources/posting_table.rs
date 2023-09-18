@@ -206,7 +206,7 @@ impl ExecutionPlan for PostingExec {
                     "PostingExec: partition_size={:?}, is_score: {:}, predicate: {:?}",
                     self.partitions.len(),
                     self.is_score,
-                    self.predicate,
+                    self.predicate.as_ref().map(|v| v.predicate.as_ref().map(|v| unsafe { &(*v.get()) })),
                 )
             }
         }
