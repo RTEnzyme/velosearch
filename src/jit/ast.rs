@@ -322,7 +322,7 @@ pub struct Boolean {
 
 impl Boolean {
     fn get_type(&self) -> JITType {
-        U8
+        I64
     }
 }
 

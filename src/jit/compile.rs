@@ -56,7 +56,7 @@ pub fn build_boolean_query(
     fn_body.while_block(
         |cond| cond.lt(cond.id("index")?, cond.id("len")?),
         |b| {
-            b.declare_as("offset", b.id("index")?)?;
+            b.declare_as("offset", b.mul(b.id("index")?, b.lit_i64(8))?)?;
             b.declare_as("res_ptr", b.add(b.id("result")?, b.id("offset")?)?)?;
             b.declare_as("res", jit_expr.clone())?;
             b.store(b.id("res")?, b.id("res_ptr")?)?;
@@ -99,10 +99,12 @@ pub fn jit_short_circuit_primitive(
         fn_body.declare_as(format!("p{i}").as_str(), fn_body.load(offset, I64)?)?;
     }
     fn_body.declare_as("index", fn_body.lit_i64(0))?;
+    // fn_body.declare("offset", I64)?;
     fn_body.while_block(
         |cond| cond.lt(cond.id("index")?, cond.id("len")?),
         |b| {
-            b.declare_as("offset", b.id("index")?)?;
+            b.declare_as("offset", b.mul(b.id("index")?, b.lit_i64(8))?)?;
+            // b.declare_as("offset", b.mul(b.id("index")?, b.lit_i64(8))?)?;
             b.declare_as("res_ptr", b.add(b.id("result")?, b.id("offset")?)?)?;
             b.declare_as("res", jit_expr.clone())?;
             // b.declare_as("res", b.lit_i64(66))?;
@@ -325,17 +327,17 @@ mod test {
             start_idx: 0,
         };
         // allocate memory for result
-        let result: Vec<u8> = vec![0x0; 2];
-        let test1 = vec![0x31, 0x0];
-        let test2 = vec![0x11, 0x23];
-        let test3 = vec![0x21, 0xFF];
-        let test4 = vec![0x21, 0x12];
-        let init_v: Vec<u8> = vec![u8::MAX, 1];
+        let mut result: Vec<u64> = vec![0x0; 8];
+        let test1: Vec<u64> = vec![0xFF, 0xFF, 0x32, 0x22, 0x12, 0x56, 0x0, 0x53];
+        let test2: Vec<u64> = vec![0x0, 0xFF, 0x34, 0x14, 0x66, 0x91, 0x12, 0x34];
+        let test3: Vec<u64> = vec![0x1, 0x0, 0x11, 0x12, 0x92, 0x12, 0x93, 0x11];
+        let test4: Vec<u64> = vec![0xFF, 0x0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+        let init_v: Vec<u64> = vec![u64::MAX; 8];
         let batch = vec![
-            test1.as_ptr(),
-            test2.as_ptr(),
-            test3.as_ptr(),
-            test4.as_ptr(),
+            test1.as_ptr() as *const u8,
+            test2.as_ptr() as *const u8,
+            test3.as_ptr() as *const u8,
+            test4.as_ptr() as *const u8,
         ];
 
         // Compile and run JIT code
@@ -346,11 +348,11 @@ mod test {
         let gen_func = jit.compile(gen_func).unwrap();
         debug!("start transmute");
         let code_fn = unsafe {
-            core::mem::transmute::<_, fn(*const *const u8, *const u8, *const u8, i64) -> ()>(gen_func)
+            core::mem::transmute::<_, fn(*const *const u8, *const u8, *mut u8, i64) -> ()>(gen_func)
         };
         debug!("end transmute");
-        code_fn(batch.as_ptr(), init_v.as_ptr(), result.as_ptr(), 2);
-        assert_eq!(result, vec![0x31, 0]);
+        code_fn(batch.as_ptr(), init_v.as_ptr() as *const u8, result.as_mut_ptr() as *mut u8, 8);
+        assert_eq!(result, vec![33, 0xa1 & (0x23 | (0x12 & 0xFF)), 0, 0, 0, 0, 0, 0]);
     }
 
     #[test]

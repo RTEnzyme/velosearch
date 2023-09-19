@@ -349,18 +349,19 @@ impl<'a> FunctionTranslator<'a> {
 
     fn translate_boolean(&mut self, predicate: Predicate, start_idx: usize) -> Result<Value> {
         let offset = self.translate_expr(Expr::Identifier(format!("offset"), I64))?;
-        let init_v = self.translate_expr(Expr::Identifier(format!("init_v"), U8))?;
+        let init_v = self.translate_expr(Expr::Identifier(format!("init_v"), I64))?;
         let init_v_ptr = self.builder.ins().iadd(init_v, offset);
-        let mut init_v = self.builder.ins().load(U8.native, MemFlags::new().with_readonly(), init_v_ptr, 0);
+        let mut init_v = self.builder.ins().load(I64.native, MemFlags::new().with_readonly(), init_v_ptr, 0);
         match predicate {
             Predicate::And { args } => {
                 let mut body_block;
                 let else_block = self.builder.create_block();
-                self.builder.append_block_param(else_block, U8.native);
+                self.builder.append_block_param(else_block, I64.native);
                 for expr in args {
-                    init_v = self.translate_predicate(&expr,  offset, init_v, start_idx)?;
+                    let leaf = self.translate_predicate(&expr,  offset, start_idx)?;
+                    init_v = self.builder.ins().band(leaf, init_v);
                     body_block = self.builder.create_block();
-                    self.builder.append_block_param(body_block, U8.native);
+                    self.builder.append_block_param(body_block, I64.native);
                     self.builder.ins().brif(
                         init_v,
                         body_block,
@@ -380,7 +381,7 @@ impl<'a> FunctionTranslator<'a> {
                 Err(FastErr::JitErr(format!("The top level of predicate must be `AND`.")))
             }
             Predicate::Leaf { idx } => {
-                let v = self.translate_predicate(&Predicate::Leaf { idx },  offset, init_v, start_idx)?;
+                let v = self.translate_predicate(&Predicate::Leaf { idx },  offset, start_idx)?;
                 Ok(v)
             }
         }
@@ -390,19 +391,19 @@ impl<'a> FunctionTranslator<'a> {
         &mut self,
         predicate: &Predicate,
         offset: Value,
-        init_v: Value,
         start_idx: usize,
     ) -> Result<Value> {
-        let mut init_v = init_v;
         match predicate {
             Predicate::And { args } => {
                 let mut body_block;
                 let else_block = self.builder.create_block();
-                self.builder.append_block_param(else_block, U8.native);
-                for expr in args {
-                    init_v = self.translate_predicate(&expr, offset, init_v, start_idx)?;
+                self.builder.append_block_param(else_block, I64.native);
+                let mut init_v = self.translate_predicate(&args[0], offset, start_idx)?;
+                for expr in &args[1..] {
+                    let leaf = self.translate_predicate(&expr, offset, start_idx)?;
+                    init_v = self.builder.ins().band(init_v, leaf);
                     body_block = self.builder.create_block();
-                    self.builder.append_block_param(body_block, U8.native);
+                    self.builder.append_block_param(body_block, I64.native);
                     self.builder.ins().brif(
                         init_v,
                         body_block,
@@ -422,7 +423,7 @@ impl<'a> FunctionTranslator<'a> {
             Predicate::Or { args } => {
                 let values: Vec<Value> = args.into_iter()
                     .map(|v| {
-                        self.translate_predicate(v, offset, init_v, start_idx)
+                        self.translate_predicate(v, offset, start_idx)
                     })
                     .collect::<Result<_>>()?;
                 Ok(values.into_iter()
@@ -431,7 +432,7 @@ impl<'a> FunctionTranslator<'a> {
             }
             Predicate::Leaf { idx } => {
                 let v= self.get_leaf_value(*idx - start_idx, offset);
-                Ok(self.builder.ins().band(init_v, v))
+                Ok(v)
             }
         }
     }
@@ -440,7 +441,7 @@ impl<'a> FunctionTranslator<'a> {
     fn get_leaf_value(&mut self, num: usize, offset: Value) -> Value {
         let v = self.translate_expr(Expr::Identifier(format!("p{num}"), I64)).unwrap();
         let value_off = self.builder.ins().iadd(v, offset);
-        self.builder.ins().load(U8.native, MemFlags::new().with_readonly(), value_off, 0)
+        self.builder.ins().load(I64.native, MemFlags::new().with_readonly(), value_off, 0)
     }
 
     fn translate_boolean_expr(&mut self, expr: BooleanExpr) -> Result<Value> {

@@ -64,7 +64,7 @@ fn optimize_predicate_inner(predicate: &mut PhysicalPredicate) {
             // The first level is `AND`.
             let mut node_num = 0;
             let mut leaf_num = 0;
-            let mut cum_instructions: f64 = 0.;
+            // let mut cum_instructions: f64 = 0.;
             let mut cnf = Vec::new();
             let mut optimized_args = Vec::new();
             let mut combine_num = 0;
@@ -84,23 +84,23 @@ fn optimize_predicate_inner(predicate: &mut PhysicalPredicate) {
                     optimized_args.push(SubPredicate::new_with_predicate(PhysicalPredicate::Leaf { primitive }));
                     cnf.clear();
                     node_num = 0;
-                    leaf_num = 0;
-                    cum_instructions = 0.;
+                    // leaf_num = 0;
+                    // cum_instructions = 0.;
                     continue;
                 }
-                cum_instructions += node.cs * node.leaf_num as f64 ;
+                // cum_instructions += node.cs * node.leaf_num as f64 ;
                 // If cpo > threshold, end this optimization stage
-                let cpo = (cum_instructions + node.cs) / (leaf_num as f64 + node.leaf_num as f64);
-                if cpo > 0.8 {
-                    if node_num < 2 {
-                        break;
-                    }
-                    combine_num += cnf.len();
-                    let primitive = Primitives::ShortCircuitPrimitive(ShortCircuit::new(&cnf, node_num, leaf_num));
-                    optimized_args.push(SubPredicate::new_with_predicate(PhysicalPredicate::Leaf { primitive }));
-                    cnf.clear();
-                    break;
-                }
+                // let cpo = (cum_instructions + node.cs) / (leaf_num as f64 + node.leaf_num as f64);
+                // if cpo > 0.8 {
+                    // if node_num < 2 {
+                    //     break;
+                    // }
+                    // combine_num += cnf.len();
+                    // let primitive = Primitives::ShortCircuitPrimitive(ShortCircuit::new(&cnf, node_num, leaf_num));
+                    // optimized_args.push(SubPredicate::new_with_predicate(PhysicalPredicate::Leaf { primitive }));
+                    // cnf.clear();
+                    // break;
+                // }
                 cnf.push(&node.sub_predicate);
                 node_num += node.node_num();
                 leaf_num += node.leaf_num();
