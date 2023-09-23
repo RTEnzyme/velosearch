@@ -354,28 +354,29 @@ impl<'a> FunctionTranslator<'a> {
         let mut init_v = self.builder.ins().load(I64.native, MemFlags::new().with_readonly(), init_v_ptr, 0);
         match predicate {
             Predicate::And { args } => {
-                let mut body_block;
-                let else_block = self.builder.create_block();
-                self.builder.append_block_param(else_block, I64.native);
+                // let mut body_block;
+                // let else_block = self.builder.create_block();
+                // self.builder.append_block_param(else_block, I64.native);
                 for expr in args {
                     let leaf = self.translate_predicate(&expr,  offset, start_idx)?;
                     init_v = self.builder.ins().band(leaf, init_v);
-                    body_block = self.builder.create_block();
-                    self.builder.append_block_param(body_block, I64.native);
-                    self.builder.ins().brif(
-                        init_v,
-                        body_block,
-                        &[init_v],
-                        else_block,
-                        &[init_v],
-                    );
-                    self.builder.switch_to_block(body_block);
-                    self.builder.seal_block(body_block);
+                    // body_block = self.builder.create_block();
+                    // self.builder.append_block_param(body_block, I64.native);
+                    // self.builder.ins().brif(
+                    //     init_v,
+                    //     body_block,
+                    //     &[init_v],
+                    //     else_block,
+                    //     &[init_v],
+                    // );
+                    // self.builder.switch_to_block(body_block);
+                    // self.builder.seal_block(body_block);
                 }
-                self.builder.ins().jump(else_block, &[init_v]);
-                self.builder.switch_to_block(else_block);
-                self.builder.seal_block(else_block);
-                Ok(self.builder.block_params(else_block)[0])
+                // self.builder.ins().jump(else_block, &[init_v]);
+                // self.builder.switch_to_block(else_block);
+                // self.builder.seal_block(else_block);
+                // Ok(self.builder.block_params(else_block)[0])
+                Ok(init_v)
             }
             Predicate::Or { .. } => {
                 Err(FastErr::JitErr(format!("The top level of predicate must be `AND`.")))
@@ -395,30 +396,30 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<Value> {
         match predicate {
             Predicate::And { args } => {
-                let mut body_block;
-                let else_block = self.builder.create_block();
-                self.builder.append_block_param(else_block, I64.native);
+                // let mut body_block;
+                // let else_block = self.builder.create_block();
+                // self.builder.append_block_param(else_block, I64.native);
                 let mut init_v = self.translate_predicate(&args[0], offset, start_idx)?;
                 for expr in &args[1..] {
                     let leaf = self.translate_predicate(&expr, offset, start_idx)?;
                     init_v = self.builder.ins().band(init_v, leaf);
-                    body_block = self.builder.create_block();
-                    self.builder.append_block_param(body_block, I64.native);
-                    self.builder.ins().brif(
-                        init_v,
-                        body_block,
-                        &[init_v],
-                        else_block,
-                        &[init_v],
-                    );
-                    self.builder.switch_to_block(body_block);
-                    self.builder.seal_block(body_block);
+                    // body_block = self.builder.create_block();
+                    // self.builder.append_block_param(body_block, I64.native);
+                    // self.builder.ins().brif(
+                    //     init_v,
+                    //     body_block,
+                    //     &[init_v],
+                    //     else_block,
+                    //     &[init_v],
+                    // );
+                    // self.builder.switch_to_block(body_block);
+                    // self.builder.seal_block(body_block);
                 }
-                self.builder.ins().jump(else_block, &[init_v]);
-                self.builder.switch_to_block(else_block);
-                self.builder.seal_block(else_block);
-                Ok(self.builder.block_params(else_block)[0])
-
+                // self.builder.ins().jump(else_block, &[init_v]);
+                // self.builder.switch_to_block(else_block);
+                // self.builder.seal_block(else_block);
+                // Ok(self.builder.block_params(else_block)[0])
+                Ok(init_v)
             }
             Predicate::Or { args } => {
                 let values: Vec<Value> = args.into_iter()

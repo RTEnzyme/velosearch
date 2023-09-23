@@ -30,7 +30,7 @@ pub struct FastArgs {
     /// file path
     pub path: Vec<String>,
 
-    #[arg(value_enum, short)]
+    #[arg(value_enum, long)]
     pub handler: Handler,
 
     #[arg(short, long)]

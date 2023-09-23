@@ -84,22 +84,34 @@ fn optimize_predicate_inner(predicate: &mut PhysicalPredicate) {
                     optimized_args.push(SubPredicate::new_with_predicate(PhysicalPredicate::Leaf { primitive }));
                     cnf.clear();
                     node_num = 0;
-                    // leaf_num = 0;
+                    leaf_num = 0;
                     // cum_instructions = 0.;
                     continue;
+                }
+                if node.rank < -0.99 {
+                    if node_num < 2 {
+                        break;
+                    }
+                    combine_num += cnf.len();
+                    let primitive = Primitives::ShortCircuitPrimitive(ShortCircuit::new(&cnf, node_num, leaf_num));
+                    optimized_args.push(SubPredicate::new_with_predicate(PhysicalPredicate::Leaf { primitive }));
+                    cnf.clear();
+                    node_num = 0;
+                    leaf_num = 0;
+                    break;
                 }
                 // cum_instructions += node.cs * node.leaf_num as f64 ;
                 // If cpo > threshold, end this optimization stage
                 // let cpo = (cum_instructions + node.cs) / (leaf_num as f64 + node.leaf_num as f64);
                 // if cpo > 0.8 {
-                    // if node_num < 2 {
-                    //     break;
-                    // }
-                    // combine_num += cnf.len();
-                    // let primitive = Primitives::ShortCircuitPrimitive(ShortCircuit::new(&cnf, node_num, leaf_num));
-                    // optimized_args.push(SubPredicate::new_with_predicate(PhysicalPredicate::Leaf { primitive }));
-                    // cnf.clear();
-                    // break;
+                //     if node_num < 2 {
+                //         break;
+                //     }
+                //     combine_num += cnf.len();
+                //     let primitive = Primitives::ShortCircuitPrimitive(ShortCircuit::new(&cnf, node_num, leaf_num));
+                //     optimized_args.push(SubPredicate::new_with_predicate(PhysicalPredicate::Leaf { primitive }));
+                //     cnf.clear();
+                //     break;
                 // }
                 cnf.push(&node.sub_predicate);
                 node_num += node.node_num();

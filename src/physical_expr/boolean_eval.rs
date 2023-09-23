@@ -1,15 +1,30 @@
-use std::{sync::Arc, any::Any, cell::SyncUnsafeCell, arch::x86_64::{__m512i, _mm512_and_epi64, _mm512_or_epi64}};
+use std::{sync::Arc, any::Any, cell::SyncUnsafeCell, arch::x86_64::{__m512i, _mm512_and_epi64, _mm512_or_epi64, _mm512_loadu_epi64}};
 
 use datafusion::{physical_plan::{expressions::{BinaryExpr, Column}, PhysicalExpr, ColumnarValue}, arrow::{datatypes::{Schema, DataType}, record_batch::RecordBatch, array::{as_boolean_array, UInt64Array}}, error::DataFusionError, common::{Result, cast::as_uint64_array}};
+use sorted_iter::{assume::AssumeSortedByItemExt, SortedIterator};
 use tracing::{debug, info};
 
-use crate::{ShortCircuit, utils::avx512::{avx512_bitwise_and, avx512_bitwise_or}};
+use crate::{ShortCircuit, utils::avx512::{avx512_bitwise_and, avx512_bitwise_or, U64x8}};
 
 #[derive(Clone, Debug)]
 pub enum Primitives {
     BitwisePrimitive(BinaryExpr),
     ShortCircuitPrimitive(ShortCircuit),
     ColumnPrimitive(Column),
+}
+
+#[derive(Clone, Debug)]
+pub enum Chunk<'a> {
+    Bitmap(&'a [u8]),
+    IDs(&'a [u16]),
+    N0NE,
+}
+
+#[derive(Clone, Debug)]
+pub enum TempChunk {
+    Bitmap(__m512i),
+    IDs(Vec<u16>),
+    N0NE,
 }
 
 impl Primitives {
@@ -91,7 +106,7 @@ pub enum PhysicalPredicate {
 }
 
 impl PhysicalPredicate {
-    pub fn eval_avx512(&self, batch: &Vec<Option<Vec<__m512i>>>, init_v: Option<Vec<__m512i>>, is_and: bool) -> Result<Option<Vec<__m512i>>> {
+    pub fn eval_avx512(&self, batch: &Vec<Option<Vec<Chunk>>>, init_v: Option<Vec<TempChunk>>, is_and: bool) -> Result<Option<Vec<TempChunk>>> {
         let mut init_v = init_v;
         match self {
             PhysicalPredicate::And { args } => {
@@ -120,7 +135,25 @@ impl PhysicalPredicate {
                                 Some(e) => {
                                     let eval = e.into_iter()
                                     .zip(eval.into_iter())
-                                    .map(|(a, b)| unsafe { _mm512_or_epi64(a, b) })
+                                    .map(|(a, b)| { 
+                                        match (a, b) {
+                                            (TempChunk::Bitmap(a), TempChunk::Bitmap(b)) => {
+                                                TempChunk::Bitmap(unsafe {
+                                                    _mm512_or_epi64(a, b)
+                                                })
+                                            }
+                                            (TempChunk::IDs(ids), TempChunk::Bitmap(b)) => {
+                                                let mut chunk = [0; 8];
+                                                for id in ids {
+                                                    chunk[(id as usize) >> 8] |= 1 << ((id as usize) % 64);
+                                                }
+                                                TempChunk::Bitmap(unsafe {
+                                                    U64x8{ vals: chunk }.vector
+                                                })
+                                            }
+                                            (_, _) => unreachable!(),
+                                        }
+                                    })
                                     .collect();
                                     Ok(Some(eval))
                                 }
@@ -137,12 +170,52 @@ impl PhysicalPredicate {
                                         .into_iter()
                                         .zip(i.into_iter())
                                         .map(|(a, b)| {
-                                            unsafe { _mm512_and_epi64(a, *b) }
+                                            match (a, b) {
+                                                (TempChunk::Bitmap(a), Chunk::Bitmap(b)) => {
+                                                    let b = unsafe { _mm512_loadu_epi64((*b).as_ptr() as *const i64)};
+                                                    TempChunk::Bitmap(unsafe { _mm512_and_epi64(a, b) })
+                                                }
+                                                (TempChunk::Bitmap(a), Chunk::IDs(b)) => {
+                                                    let mut a = unsafe { U64x8{ vector: a }.vals };
+                                                    for id in *b {
+                                                        a[(*id as usize) >> 8] |= 1 << ((*id as usize) % 64);
+                                                    }
+                                                    TempChunk::Bitmap(unsafe { U64x8 { vals: a }.vector })
+                                                }
+                                                (TempChunk::IDs(a), Chunk::Bitmap(b)) => {
+                                                    TempChunk::IDs(
+                                                        a.into_iter()
+                                                        .filter(|v| {
+                                                            (*b)[(*v as usize) >> 3] & (1 << (*v as usize % 8)) != 0
+                                                        })
+                                                        .collect()
+                                                    )
+                                                }
+                                                (TempChunk::IDs(a), Chunk::IDs(b)) => {
+                                                    let a = a.into_iter().assume_sorted_by_item();
+                                                    let b = b.into_iter().map(|&v| v).assume_sorted_by_item();
+                                                    TempChunk::IDs(a.intersection(b).collect())
+                                                }
+                                                (_, Chunk::N0NE) => {
+                                                    TempChunk::N0NE
+                                                }
+                                                _ => unreachable!(),
+                                            }
                                         })
                                         .collect();
                                     Ok(Some(eval))
                                 }
-                                (_, Some(i)) => Ok(Some(i.clone())),
+                                (_, Some(i)) => Ok(Some(i.into_iter()
+                                    .map(|a| match a {
+                                            Chunk::Bitmap(b) => {
+                                                TempChunk::Bitmap(unsafe { _mm512_loadu_epi64((*b).as_ptr() as *const i64) })
+                                            }
+                                            Chunk::IDs(ids) => {
+                                                TempChunk::IDs(ids.to_vec())
+                                            }
+                                            Chunk::N0NE => TempChunk::N0NE
+                                        }).collect()
+                                )),
                                 (_, _) => Ok(None)
                             }
                         } else {
@@ -153,7 +226,40 @@ impl PhysicalPredicate {
                                         .into_iter()
                                         .zip(i.into_iter())
                                         .map(|(a, b)| {
-                                            unsafe { _mm512_or_epi64(*a, b) }
+                                            match (a, b) {
+                                                (Chunk::Bitmap(a), TempChunk::Bitmap(b)) => {
+                                                    let a = unsafe { _mm512_loadu_epi64((*a).as_ptr() as *const i64)};
+                                                    TempChunk::Bitmap(unsafe { _mm512_or_epi64(a, b) })
+                                                }
+                                                (Chunk::Bitmap(a), TempChunk::IDs(b)) => {
+                                                    let mut a = unsafe { U64x8{
+                                                        vector: unsafe { _mm512_loadu_epi64((*a).as_ptr() as *const i64)}
+                                                    }.vals };
+                                                    for id in b {
+                                                        a[(id as usize) >> 8] |= 1 << ((id as usize) % 64);
+                                                    }
+                                                    TempChunk::Bitmap(unsafe { U64x8 { vals: a }.vector })
+                                                }
+                                                (Chunk::IDs(a), TempChunk::Bitmap(b)) => {
+                                                    let mut b = unsafe { U64x8{ vector: b }.vals };
+                                                    for id in *a {
+                                                        b[(*id as usize) >> 8] |= 1 << ((*id as usize) % 64);
+                                                    }
+                                                    TempChunk::Bitmap(unsafe { U64x8 { vals: b }.vector })
+                                                }
+                                                (Chunk::IDs(a), TempChunk::IDs(b)) => {
+                                                    let a = a.into_iter().cloned().assume_sorted_by_item();
+                                                    let b = b.into_iter().assume_sorted_by_item();
+                                                    TempChunk::IDs(b.intersection(a).collect())
+                                                }
+                                                (Chunk::Bitmap(b), TempChunk::N0NE) => unsafe {
+                                                    TempChunk::Bitmap(_mm512_loadu_epi64((*b).as_ptr() as *const i64))
+                                                }
+                                                (Chunk::IDs(ids), TempChunk::N0NE) => unsafe {
+                                                    TempChunk::IDs(ids.to_vec())
+                                                }
+                                                _ => TempChunk::N0NE,
+                                            }
                                         })
                                         .collect();
                                     Ok(Some(eval))

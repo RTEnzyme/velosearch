@@ -1,4 +1,4 @@
-use std::{any::Any, ptr::NonNull, sync::Arc, arch::x86_64::{__m512i, _mm512_loadu_epi64}};
+use std::{any::Any, ptr::NonNull, sync::Arc, arch::x86_64::{__m512i, _mm512_loadu_epi64, _mm512_setzero_si512}};
 
 use datafusion::{physical_plan::{PhysicalExpr, ColumnarValue}, arrow::{datatypes::DataType, record_batch::RecordBatch, array::{BooleanArray, ArrayData}, buffer::Buffer}, error::DataFusionError};
 use tracing::debug;
@@ -6,7 +6,7 @@ use tracing::debug;
 use crate::{jit::{ast::{Predicate, Boolean}, jit_short_circuit, AOT_PRIMITIVES}, JIT_MAX_NODES, utils::avx512::U64x8};
 use crate::utils::Result;
 
-use super::{boolean_eval::PhysicalPredicate, Primitives};
+use super::{boolean_eval::{PhysicalPredicate, Chunk, TempChunk}, Primitives};
 
 #[derive(Debug, Clone)]
 pub struct ShortCircuit {
@@ -73,32 +73,69 @@ impl ShortCircuit {
         res
     }
 
-    pub fn eval_avx512(&self, init_v: Option<Vec<__m512i>>, batch: &Vec<Option<Vec<__m512i>>>) -> Vec<__m512i> {
+    pub fn eval_avx512(&self, init_v: Option<Vec<TempChunk>>, batch: &Vec<Option<Vec<Chunk>>>) -> Vec<TempChunk> {
         debug!("Eval by short_circuit_primitives");
         let batch_len = batch[self.batch_idx[0]].as_ref().unwrap().len();
-        let batches: Vec<*const u8> = self.batch_idx
+        let empty = unsafe { _mm512_setzero_si512() };
+        let batches: Vec<Vec<__m512i>> = self.batch_idx
             .iter()
             .map(|v| {
-                batch[*v].as_ref().unwrap().as_ptr() as *const u8
+                batch[*v].as_ref().unwrap().into_iter()
+                .map(|v| {
+                    match v {
+                        Chunk::Bitmap(b) => unsafe { _mm512_loadu_epi64((*b).as_ptr() as *const i64) },
+                        Chunk::IDs(ids) => {
+                            let mut chunk = [0 as u64; 8];
+                            for id in *ids {
+                                chunk[(*id as usize) >> 8] |= 1 << ((*id as usize) % 64);
+                            }
+                            unsafe { U64x8{ vals: chunk }.vector }
+                        }
+                        Chunk::N0NE => empty,
+                    }
+                })
+                .collect()
             })
             .collect();
-
-        let mut res: Vec<u64> = vec![0; batch_len * 8];
-        let init = match init_v {
-            Some(i) => i.as_ptr() as *const u8,
-            None => batches[0],
+        let batches_ptr = batches.iter()
+        .map(|v| v.as_ptr() as *const u8)
+        .collect::<Vec<*const u8>>();
+        let init_v = match &init_v {
+            Some(v) => {
+                Some(v.into_iter()
+                .map(|v| match v {
+                    TempChunk::Bitmap(b) => *b,
+                    TempChunk::IDs(ids) => {
+                        let mut chunk = [0 as u64; 8];
+                        for id in ids {
+                            chunk[(*id as usize) >> 8] |= 1 << ((*id as usize) % 64);
+                        }
+                        unsafe { U64x8{ vals: chunk }.vector }
+                    }
+                    TempChunk::N0NE => unsafe { _mm512_setzero_si512()}
+                })
+                .collect::<Vec<__m512i>>())
+            },
+            None => None,
         };
-        (self.primitive)(
-            batches.as_ptr(),
-            init,
-            res.as_mut_ptr() as *mut u8,
-            8,
-        );
+        let init_ptr = match &init_v {
+            Some(init) => init.as_ptr() as *const u8,
+            None => batches_ptr[0],
+        };
+        let mut res: Vec<u64> = vec![0; batch_len * 8];
         
+        (self.primitive)(
+            batches_ptr.as_ptr() as *const *const u8,
+            init_ptr,
+            res.as_mut_ptr() as *mut u8,
+            batch_len as i64 * 8,
+        );
+    
+
         debug!("end eval");
         (0..batch_len).into_iter()
         .map(|v| {
-            unsafe { _mm512_loadu_epi64(res.as_ptr().add(v * 8) as *const i64)}
+            TempChunk::Bitmap(unsafe { _mm512_loadu_epi64(res.as_ptr().add(v * 8) as *const i64)})
         })
         .collect()
     }
