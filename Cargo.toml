@@ -43,6 +43,7 @@ criterion = {version = "0.5", features = ["html_reports"]}
 sorted-iter = "0.1.11"
 lazy_static = "1.4"
 bincode = "1.3"
+dashmap = "5.5"
 
 [[bench]]
 name = "arrow_bitwise_and"
@@ -68,7 +69,11 @@ harness = false
 #name = "vectorized_codegen"
 #harness = false
 
-[profile.release]
-lto = true
-opt-level = 3
-overflow-checks = false
+ [profile.release]
+ lto = true
+ opt-level = 3
+ overflow-checks = false
+
+[target.x86_64-unknown-linux-gnu]
+linker = "/usr/bin/clang"
+rustflags = ["-Clink-arg=-fuse-ld=lld", "-Clink-arg=-Wl,--no-rosegment"]

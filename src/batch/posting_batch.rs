@@ -209,6 +209,7 @@ impl PostingBatch {
         boundary_idx: usize,
         min_range: u64,
         predicate: &BooleanEvalExpr,
+        is_encoding: &Vec<bool>,
     ) -> Result<usize> {
         
         let predicate = predicate.predicate.as_ref().unwrap().get();
@@ -219,7 +220,7 @@ impl PostingBatch {
         let compress_index = unsafe {
             _mm512_loadu_epi8(COMPRESS_INDEX.as_ptr() as *const i8)
         };
-        for (j, index) in indices.iter().enumerate() {
+        for (j, (index, encoding)) in indices.iter().zip(is_encoding.into_iter()).enumerate() {
             let distri = unsafe { distris.get_unchecked(j).unwrap_unchecked() };
             let write_mask = unsafe { _pext_u64(min_range, distri ) };
             let valid_mask = unsafe { _pext_u64(distri, min_range) };
@@ -256,11 +257,19 @@ impl PostingBatch {
             for (w, p) in write_index.into_iter().zip(posting_index.into_iter()){
                 let batch = bucket.value(start_idx + p as usize);
                 if batch.len() == 64 {
-                    posting[w as usize] = Chunk::Bitmap(batch);
+                    posting[w as usize] = Chunk::Bitmap(unsafe { _mm512_loadu_epi64(batch.as_ptr() as *const i64)});
                 } else {
                     // means this's Integer list
                     let batch = unsafe {batch.align_to::<u16>().1};
-                    posting[w as usize] = Chunk::IDs(batch);
+                    if *encoding {
+                        let mut chunk: [u64; 8] = [0; 8];
+                        for &v in batch {
+                            chunk[(v as usize) / 64] |= 1 << ((v as usize) % 64);
+                        }
+                        posting[w as usize] = Chunk::Bitmap(unsafe { _mm512_loadu_epi64(chunk.as_ptr() as *const i64)});
+                    } else {
+                        posting[w as usize] = Chunk::IDs(batch);
+                    }
                 }
             }
             batches[j] = Some(posting);

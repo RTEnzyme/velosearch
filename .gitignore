@@ -5,3 +5,5 @@
 /.vscode
 /.VSCodeCounter
 *.bin
+*.data
+*.data.old

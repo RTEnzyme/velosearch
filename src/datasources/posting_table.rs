@@ -178,10 +178,12 @@ impl ExecutionPlan for PostingExec {
             context: Arc<datafusion::execution::context::TaskContext>,
         ) -> Result<datafusion::physical_plan::SendableRecordBatchStream> {
         debug!("Start PostingExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
-        let (distris, indices) = self.projected_term_meta.iter()
-            .map(|v| match v {
-                Some(v) => (Some(v.distribution[partition].clone()), v.index[partition].clone()),
-                None => (None, None),
+        let predicate_ref = self.predicate.as_ref().map(|v| v.valid_idx.as_ref());
+        let (distris, (indices, is_encoding)) = self.projected_term_meta.iter()
+            .enumerate()
+            .map(|(n, v)| match v {
+                Some(v) => (Some(v.distribution[partition].clone()), (v.index[partition].clone(), predicate_ref.map(|v| v.contains(&n)).unwrap_or(false))),
+                None => (None, (None, false)),
             })
             .unzip();
         Ok(Box::pin(PostingStream::try_new(
@@ -191,6 +193,7 @@ impl ExecutionPlan for PostingExec {
             distris,
             indices,
             self.predicate.clone(),
+            is_encoding,
             self.is_score,
         )?))
     }
@@ -287,6 +290,8 @@ pub struct PostingStream {
     index: usize,
     /// 
     predicate: Option<BooleanEvalExpr>,
+    ///
+    is_encoding: Vec<bool>,
 }
 
 impl PostingStream {
@@ -298,6 +303,7 @@ impl PostingStream {
         distris: Vec<Option<Arc<UInt64Array>>>,
         indices: Vec<Option<u32>>,
         predicate: Option<BooleanEvalExpr>,
+        is_encoding: Vec<bool>,
         is_score: bool,
     ) -> Result<Self> {
         debug!("Try new a PostingStream");
@@ -310,6 +316,7 @@ impl PostingStream {
             indices,
             predicate,
             index: 0,
+            is_encoding,
         })
     }
 }
@@ -346,6 +353,7 @@ impl Stream for PostingStream {
                     self.index,
                     min_range,
                     self.predicate.as_ref().unwrap(),
+                    &self.is_encoding,
                 ).unwrap();
                 self.index += 1;
                 let batch = RecordBatch::try_new(

@@ -1,8 +1,9 @@
 //! PrimitivesCombination optimizer that combining the bitwise primitves
 //! and short-circuit primitive according the cost per operation (cpo).
 
-use std::sync::Arc;
+use std::{sync::Arc, collections::HashSet};
 
+use dashmap::DashSet;
 use datafusion::{physical_optimizer::PhysicalOptimizerRule, physical_plan::{ExecutionPlan, boolean::BooleanExec, rewrite::TreeNodeRewritable}};
 use tracing::debug;
 
@@ -35,7 +36,10 @@ impl PhysicalOptimizerRule for PrimitivesCombination {
                         if let Some(ref predicate) = p.predicate {
                             debug!("optimize posting_exec predicate");
                             let predicate = predicate.get();
-                            optimize_predicate_inner(unsafe{predicate.as_mut()}.unwrap());
+                            let valid_idx = optimize_predicate_inner(unsafe{predicate.as_mut()}.unwrap());
+                            for i in valid_idx {
+                                p.valid_idx.insert(i);
+                            }
                             Ok(Some(plan))
                         } else {
                             Ok(Some(plan))
@@ -58,7 +62,8 @@ impl PhysicalOptimizerRule for PrimitivesCombination {
     }
 }
 
-fn optimize_predicate_inner(predicate: &mut PhysicalPredicate) {
+fn optimize_predicate_inner(predicate: &mut PhysicalPredicate) -> DashSet<usize> {
+    let mut valid_batch_idx: DashSet<usize> = DashSet::new();
     match predicate {
         PhysicalPredicate::And { args } => {
             // The first level is `AND`.
@@ -71,16 +76,19 @@ fn optimize_predicate_inner(predicate: &mut PhysicalPredicate) {
             for node in args.iter_mut().rev() {
                 if node.node_num() >= JIT_MAX_NODES {
                     // If this node oversize the JIT_MAX_NDOES, skip this node
-                    optimize_predicate_inner(&mut node.sub_predicate);
+                    valid_batch_idx.extend(optimize_predicate_inner(&mut node.sub_predicate).into_iter());
                     optimized_args.push(SubPredicate::new_with_predicate(node.sub_predicate.to_owned()));
                     combine_num += 1;
+
                     continue;
                 }
                 if node_num + node.node_num() > JIT_MAX_NODES {
                     // The number of cumulative node is larger than AOT node num.
                     // So it should compact to short-circuit primitive
                     combine_num += cnf.len();
-                    let primitive = Primitives::ShortCircuitPrimitive(ShortCircuit::new(&cnf, node_num, leaf_num));
+                    let short_circuit = ShortCircuit::new(&cnf, node_num, leaf_num);
+                    valid_batch_idx.extend(short_circuit.batch_idx.iter().cloned());
+                    let primitive = Primitives::ShortCircuitPrimitive(short_circuit);
                     optimized_args.push(SubPredicate::new_with_predicate(PhysicalPredicate::Leaf { primitive }));
                     cnf.clear();
                     node_num = 0;
@@ -93,37 +101,28 @@ fn optimize_predicate_inner(predicate: &mut PhysicalPredicate) {
                         break;
                     }
                     combine_num += cnf.len();
-                    let primitive = Primitives::ShortCircuitPrimitive(ShortCircuit::new(&cnf, node_num, leaf_num));
+                    let short_circuit = ShortCircuit::new(&cnf, node_num, leaf_num);
+                    valid_batch_idx.extend(short_circuit.batch_idx.iter().cloned());
+                    let primitive = Primitives::ShortCircuitPrimitive(short_circuit);
                     optimized_args.push(SubPredicate::new_with_predicate(PhysicalPredicate::Leaf { primitive }));
                     cnf.clear();
                     node_num = 0;
                     leaf_num = 0;
                     break;
                 }
-                // cum_instructions += node.cs * node.leaf_num as f64 ;
-                // If cpo > threshold, end this optimization stage
-                // let cpo = (cum_instructions + node.cs) / (leaf_num as f64 + node.leaf_num as f64);
-                // if cpo > 0.8 {
-                //     if node_num < 2 {
-                //         break;
-                //     }
-                //     combine_num += cnf.len();
-                //     let primitive = Primitives::ShortCircuitPrimitive(ShortCircuit::new(&cnf, node_num, leaf_num));
-                //     optimized_args.push(SubPredicate::new_with_predicate(PhysicalPredicate::Leaf { primitive }));
-                //     cnf.clear();
-                //     break;
-                // }
                 cnf.push(&node.sub_predicate);
                 node_num += node.node_num();
                 leaf_num += node.leaf_num();
             }
             if cnf.len() >= 2 {
                 combine_num += cnf.len();
-                let primitive = Primitives::ShortCircuitPrimitive(ShortCircuit::new(&cnf, node_num, leaf_num));
+                let short_circuit = ShortCircuit::new(&cnf, node_num, leaf_num);
+                valid_batch_idx.extend(short_circuit.batch_idx.iter().cloned());
+                let primitive = Primitives::ShortCircuitPrimitive(short_circuit);
                 optimized_args.push(SubPredicate::new_with_predicate(PhysicalPredicate::Leaf { primitive }));
             }
             args.truncate(args.len() - combine_num);
-            args.append(&mut optimized_args)
+            args.append(&mut optimized_args);
         }
         PhysicalPredicate::Or { args } => {
             for arg in args {
@@ -135,4 +134,5 @@ fn optimize_predicate_inner(predicate: &mut PhysicalPredicate) {
             debug!("Skip optimize predicate because the first level is only one node.");
         }
     }
+    valid_batch_idx
 }

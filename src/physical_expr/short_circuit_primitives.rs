@@ -10,7 +10,7 @@ use super::{boolean_eval::{PhysicalPredicate, Chunk, TempChunk}, Primitives};
 
 #[derive(Debug, Clone)]
 pub struct ShortCircuit {
-    batch_idx: Vec<usize>,
+    pub batch_idx: Vec<usize>,
     primitive: fn(*const *const u8, *const u8, *mut u8, i64) -> (),
 }
 
@@ -76,30 +76,10 @@ impl ShortCircuit {
     pub fn eval_avx512(&self, init_v: Option<Vec<TempChunk>>, batch: &Vec<Option<Vec<Chunk>>>) -> Vec<TempChunk> {
         debug!("Eval by short_circuit_primitives");
         let batch_len = batch[self.batch_idx[0]].as_ref().unwrap().len();
-        let empty = unsafe { _mm512_setzero_si512() };
-        let batches: Vec<Vec<__m512i>> = self.batch_idx
+        let batches: Vec<*const u8> = self.batch_idx
             .iter()
-            .map(|v| {
-                batch[*v].as_ref().unwrap().into_iter()
-                .map(|v| {
-                    match v {
-                        Chunk::Bitmap(b) => unsafe { _mm512_loadu_epi64((*b).as_ptr() as *const i64) },
-                        Chunk::IDs(ids) => {
-                            let mut chunk = [0 as u64; 8];
-                            for id in *ids {
-                                chunk[(*id as usize) >> 8] |= 1 << ((*id as usize) % 64);
-                            }
-                            unsafe { U64x8{ vals: chunk }.vector }
-                        }
-                        Chunk::N0NE => empty,
-                    }
-                })
-                .collect()
-            })
+            .map(|v| {batch[*v].as_ref().unwrap().as_ptr() as *const u8})
             .collect();
-        let batches_ptr = batches.iter()
-        .map(|v| v.as_ptr() as *const u8)
-        .collect::<Vec<*const u8>>();
         let init_v = match &init_v {
             Some(v) => {
                 Some(v.into_iter()
@@ -120,12 +100,12 @@ impl ShortCircuit {
         };
         let init_ptr = match &init_v {
             Some(init) => init.as_ptr() as *const u8,
-            None => batches_ptr[0],
+            None => batches[0],
         };
         let mut res: Vec<u64> = vec![0; batch_len * 8];
         
         (self.primitive)(
-            batches_ptr.as_ptr() as *const *const u8,
+            batches.as_ptr() as *const *const u8,
             init_ptr,
             res.as_mut_ptr() as *mut u8,
             batch_len as i64 * 8,
