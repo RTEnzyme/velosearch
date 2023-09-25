@@ -133,140 +133,134 @@ impl PhysicalPredicate {
                         } else {
                             let eval = s.eval_avx512(None, &batch);
                             match init_v {
-                                Some(e) => {
-                                    let eval = e.into_iter()
-                                    .zip(eval.into_iter())
-                                    .map(|(a, b)| { 
-                                        match (a, b) {
-                                            (TempChunk::Bitmap(a), TempChunk::Bitmap(b)) => {
-                                                TempChunk::Bitmap(unsafe {
-                                                    _mm512_or_epi64(a, b)
+                                Some(mut e) => {
+                                    e.iter_mut()
+                                    .zip(eval.iter())
+                                    .for_each(|(a, b)| { 
+                                        match (&a, b) {
+                                            (TempChunk::Bitmap(a_bm), TempChunk::Bitmap(b)) => {
+                                                *a = TempChunk::Bitmap(unsafe {
+                                                    _mm512_or_epi64(*a_bm, *b)
                                                 })
                                             }
                                             (TempChunk::IDs(ids), TempChunk::Bitmap(b)) => {
-                                                let mut chunk = unsafe {U64x8{vector: b}.vals};
+                                                let mut chunk = unsafe {U64x8{vector: *b}.vals};
                                                 for id in ids {
-                                                    chunk[(id as usize) >> 8] |= 1 << ((id as usize) % 64);
+                                                    chunk[(*id as usize) >> 8] |= 1 << ((*id as usize) % 64);
                                                 }
-                                                TempChunk::Bitmap(unsafe {
+                                                *a = TempChunk::Bitmap(unsafe {
                                                     U64x8{ vals: chunk }.vector
                                                 })
                                             }
                                             (_, _) => unreachable!(),
                                         }
-                                    })
-                                    .collect();
-                                    Ok(Some(eval))
+                                    });
                                 }
-                                None => Ok(None)
+                                None => {}
                             }
+                            Ok(Some(eval))
                         }
                     }
                     Primitives::ColumnPrimitive(c) => {
                         if is_and {
-                            match (init_v, eval_array) {
+                            let eval_array = &batch[c.index()];
+                            match (&mut init_v, eval_array) {
                                 (Some(e), Some(i)) => {
-                                    let eval = e
-                                        .into_iter()
-                                        .zip(i.into_iter())
-                                        .map(|(a, b)| {
-                                            match (a, b) {
-                                                (TempChunk::Bitmap(a), Chunk::Bitmap(b)) => {
-                                                    TempChunk::Bitmap(unsafe { _mm512_and_epi64(a, *b) })
-                                                }
-                                                (TempChunk::Bitmap(a), Chunk::IDs(b)) => {
-                                                    let mut a = unsafe { U64x8{ vector: a }.vals };
-                                                    for id in *b {
-                                                        a[(*id as usize) >> 8] |= 1 << ((*id as usize) % 64);
-                                                    }
-                                                    TempChunk::Bitmap(unsafe { U64x8 { vals: a }.vector })
-                                                }
-                                                (TempChunk::IDs(a), Chunk::Bitmap(b)) => {
-                                                    let b = unsafe {U64x8{ vector: *b }.vals};
-                                                    TempChunk::IDs(
-                                                        a.into_iter()
-                                                        .filter(|v| {
-                                                            b[(*v as usize) >> 8] & (1 << (*v as usize % 64)) != 0
-                                                        })
-                                                        .collect()
-                                                    )
-                                                }
-                                                (TempChunk::IDs(a), Chunk::IDs(b)) => {
-                                                    let a = a.into_iter().assume_sorted_by_item();
-                                                    let b = b.into_iter().map(|&v| v).assume_sorted_by_item();
-                                                    TempChunk::IDs(a.intersection(b).collect())
-                                                }
-                                                (_, Chunk::N0NE) => {
-                                                    TempChunk::N0NE
-                                                }
-                                                _ => unreachable!(),
+                                    for (a, b) in e.iter_mut().zip(i.into_iter()) {
+                                        match (&a, b) {
+                                            (TempChunk::Bitmap(a_bm), Chunk::Bitmap(b_bm)) => {
+                                                *a = TempChunk::Bitmap(unsafe { _mm512_and_epi64(*a_bm, *b_bm) })
                                             }
-                                        })
-                                        .collect();
-                                    Ok(Some(eval))
+                                            (TempChunk::Bitmap(a_bm), Chunk::IDs(b)) => {
+                                                let mut a_id = unsafe { U64x8{ vector: *a_bm }.vals };
+                                                for id in *b {
+                                                    a_id[(*id as usize) >> 8] |= 1 << ((*id as usize) % 64);
+                                                }
+                                                *a = TempChunk::Bitmap(unsafe { U64x8 { vals: a_id }.vector })
+                                            }
+                                            (TempChunk::IDs(a_id), Chunk::Bitmap(b_bm)) => {
+                                                let b = unsafe {U64x8{ vector: *b_bm }.vals};
+                                                *a = TempChunk::IDs(
+                                                    a_id.into_iter()
+                                                    .filter(|v| {
+                                                        b[(**v as usize) >> 8] & (1 << (**v as usize % 64)) != 0
+                                                    })
+                                                    .map(|v| *v)
+                                                    .collect()
+                                                )
+                                            }
+                                            (TempChunk::IDs(a_id), Chunk::IDs(b_id)) => {
+                                                let a_id = a_id.into_iter().map(|v|*v).assume_sorted_by_item();
+                                                let b_id = b_id.into_iter().map(|&v| v).assume_sorted_by_item();
+                                                *a = TempChunk::IDs(a_id.intersection(b_id).collect())
+                                            }
+                                            (_, Chunk::N0NE) => {
+                                                *a = TempChunk::N0NE
+                                            }
+                                            _ => unreachable!(),
+                                        }
+                                    }
                                 }
-                                (_, Some(i)) => Ok(Some(i.into_iter()
-                                    .map(|a| match a {
-                                            Chunk::Bitmap(b) => {
-                                                TempChunk::Bitmap(*b)
-                                            }
-                                            Chunk::IDs(ids) => {
-                                                TempChunk::IDs(ids.to_vec())
-                                            }
-                                            Chunk::N0NE => TempChunk::N0NE
-                                        }).collect()
-                                )),
-                                (_, _) => Ok(None)
+                                (_, Some(i)) => {
+                                    init_v = Some(
+                                        i.into_iter()
+                                        .map(|a| match a {
+                                                Chunk::Bitmap(b) => {
+                                                    TempChunk::Bitmap(*b)
+                                                }
+                                                Chunk::IDs(ids) => {
+                                                    TempChunk::IDs(ids.to_vec())
+                                                }
+                                                Chunk::N0NE => TempChunk::N0NE
+                                        })
+                                        .collect()
+                                );},
+                                (_, _) => {}
                             }
                         } else {
                             let eval_array = &batch[c.index()];
-                            match (eval_array, init_v) {
+                            match (eval_array, &mut init_v) {
                                 (Some(e), Some(i)) => {
-                                    let eval = e
-                                        .into_iter()
-                                        .zip(i.into_iter())
-                                        .map(|(a, b)| {
-                                            match (a, b) {
-                                                (Chunk::Bitmap(a), TempChunk::Bitmap(b)) => {
-                                                    TempChunk::Bitmap(unsafe { _mm512_or_epi64(*a, b) })
-                                                }
-                                                (Chunk::Bitmap(a), TempChunk::IDs(b)) => {
-                                                    let mut a = unsafe { U64x8{
-                                                        vector: *a
-                                                    }.vals };
-                                                    for id in b {
-                                                        a[(id as usize) >> 8] |= 1 << ((id as usize) % 64);
-                                                    }
-                                                    TempChunk::Bitmap(unsafe { U64x8 { vals: a }.vector })
-                                                }
-                                                (Chunk::IDs(a), TempChunk::Bitmap(b)) => {
-                                                    let mut b = unsafe { U64x8{ vector: b }.vals };
-                                                    for id in *a {
-                                                        b[(*id as usize) >> 8] |= 1 << ((*id as usize) % 64);
-                                                    }
-                                                    TempChunk::Bitmap(unsafe { U64x8 { vals: b }.vector })
-                                                }
-                                                (Chunk::IDs(a), TempChunk::IDs(b)) => {
-                                                    let a = a.into_iter().cloned().assume_sorted_by_item();
-                                                    let b = b.into_iter().assume_sorted_by_item();
-                                                    TempChunk::IDs(b.intersection(a).collect())
-                                                }
-                                                (Chunk::Bitmap(b), TempChunk::N0NE) => {
-                                                    TempChunk::Bitmap(*b)
-                                                }
-                                                (Chunk::IDs(ids), TempChunk::N0NE) => {
-                                                    TempChunk::IDs(ids.to_vec())
-                                                }
-                                                _ => TempChunk::N0NE,
+                                    for (a, b) in i.iter_mut().zip(e.into_iter()) {
+                                        match (b, &a) {
+                                            (Chunk::Bitmap(a_bm), TempChunk::Bitmap(b_bm)) => {
+                                                *a = TempChunk::Bitmap(unsafe { _mm512_or_epi64(*a_bm, *b_bm) })
                                             }
-                                        })
-                                        .collect();
-                                    Ok(Some(eval))
+                                            (Chunk::Bitmap(a_bm), TempChunk::IDs(b_id)) => {
+                                                let mut bitmap = unsafe { U64x8{
+                                                    vector: *a_bm
+                                                }.vals };
+                                                for id in b_id {
+                                                    bitmap[(*id as usize) >> 8] |= 1 << ((*id as usize) % 64);
+                                                }
+                                                *a = TempChunk::Bitmap(unsafe { U64x8 { vals: bitmap }.vector })
+                                            }
+                                            (Chunk::IDs(a_id), TempChunk::Bitmap(b_bm)) => {
+                                                let mut b = unsafe { U64x8{ vector: *b_bm }.vals };
+                                                for &id in *a_id {
+                                                    b[(id as usize) >> 8] |= 1 << ((id as usize) % 64);
+                                                }
+                                                *a = TempChunk::Bitmap(unsafe { U64x8 { vals: b }.vector })
+                                            }
+                                            (Chunk::IDs(a_id), TempChunk::IDs(b_id)) => {
+                                                let a_id = a_id.into_iter().cloned().assume_sorted_by_item();
+                                                let b_id = b_id.into_iter().cloned().assume_sorted_by_item();
+                                                *a = TempChunk::IDs(b_id.intersection(a_id).collect())
+                                            }
+                                            (Chunk::Bitmap(a_bm), TempChunk::N0NE) => {
+                                                *a = TempChunk::Bitmap(*a_bm)
+                                            }
+                                            (Chunk::IDs(a_ids), TempChunk::N0NE) => {
+                                                *a = TempChunk::IDs(a_ids.to_vec())
+                                            }
+                                            _ => *a = TempChunk::N0NE,
+                                        }
+                                    }
                                 }
-                                (_, Some(b)) => Ok(Some(b)),
-                                (_, _) => Ok(None),
+                                (_, _) => { },
                             }
                         }
+                        Ok(init_v)
                     }
                 }
             }

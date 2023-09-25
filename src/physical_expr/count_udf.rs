@@ -25,7 +25,8 @@ impl Accumulator for CountValid {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = &values[0];
         // let count = avx512_vpopcnt(array.data().buffers()[0].as_slice()) as i64;
-        let count = as_uint64_array(array).unwrap().value(0) as i64;
+        // let count = as_uint64_array(array).unwrap().value(0) as i64;
+        let count = unsafe { array.data().buffers()[0].align_to::<i64>().1[0] };
         debug!("update count: {:?}", count);
         self.count += count;
         Ok(())

@@ -96,7 +96,7 @@ fn optimize_predicate_inner(predicate: &mut PhysicalPredicate) -> DashSet<usize>
                     // cum_instructions = 0.;
                     continue;
                 }
-                if node.rank < -0.99 {
+                if node.rank < -1.99 {
                     if node_num < 2 {
                         break;
                     }

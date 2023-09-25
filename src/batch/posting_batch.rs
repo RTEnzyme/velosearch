@@ -220,6 +220,7 @@ impl PostingBatch {
         let compress_index = unsafe {
             _mm512_loadu_epi8(COMPRESS_INDEX.as_ptr() as *const i8)
         };
+        debug!("start select valid batch");
         for (j, (index, encoding)) in indices.iter().zip(is_encoding.into_iter()).enumerate() {
             let distri = unsafe { distris.get_unchecked(j).unwrap_unchecked() };
             let write_mask = unsafe { _pext_u64(min_range, distri ) };
@@ -274,8 +275,9 @@ impl PostingBatch {
             }
             batches[j] = Some(posting);
         }
-
+        debug!("start eval");
         let eval = predicate_ref.eval_avx512(&batches, None, true)?;
+        debug!("end eval");
         // batches.clear();
         if let Some(e) = eval {
             let mut accumulator = unsafe { _mm512_setzero_si512() };

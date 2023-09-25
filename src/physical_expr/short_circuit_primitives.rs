@@ -75,6 +75,7 @@ impl ShortCircuit {
 
     pub fn eval_avx512(&self, init_v: Option<Vec<TempChunk>>, batch: &Vec<Option<Vec<Chunk>>>) -> Vec<TempChunk> {
         debug!("Eval by short_circuit_primitives");
+        let empty = unsafe { _mm512_setzero_si512()};
         let batch_len = batch[self.batch_idx[0]].as_ref().unwrap().len();
         let batches: Vec<*const u8> = self.batch_idx
             .iter()
@@ -90,9 +91,9 @@ impl ShortCircuit {
                         for id in ids {
                             chunk[(*id as usize) >> 8] |= 1 << ((*id as usize) % 64);
                         }
-                        unsafe { U64x8{ vals: chunk }.vector }
+                        unsafe { _mm512_loadu_epi64(chunk.as_ptr() as *const i64 )}
                     }
-                    TempChunk::N0NE => unsafe { _mm512_setzero_si512()}
+                    TempChunk::N0NE => empty,
                 })
                 .collect::<Vec<__m512i>>())
             },
