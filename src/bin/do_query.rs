@@ -42,7 +42,7 @@ async fn main_inner(index_dir: String) -> Result<()> {
         let predicate = predicate.build();
         let index = ctx.boolean_with_provider(table_source.clone(), &schema, predicate, false).await.unwrap();
         let res = index.collect().await.unwrap();
-        println!("{:}",as_uint64_array(res[0].column(0)).unwrap().value(0));
+        println!("1");
     }
 
     Ok(())

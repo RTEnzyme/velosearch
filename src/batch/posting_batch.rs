@@ -1,4 +1,4 @@
-use std::{sync::Arc, ops::Index, collections::BTreeMap, mem::size_of_val, ptr::NonNull, cell::RefCell, arch::x86_64::{_pext_u64, _blsr_u64, __m512i, _mm512_loadu_epi64, _mm512_popcnt_epi64, _mm512_reduce_add_epi64, _mm512_setzero_si512, _mm512_add_epi64, _mm512_mask_compressstoreu_epi16, _mm512_loadu_epi16, _mm512_loadu_epi8, _mm512_mask_compressstoreu_epi8}, slice::from_raw_parts};
+use std::{sync::Arc, ops::Index, collections::BTreeMap, mem::size_of_val, ptr::NonNull, cell::RefCell, arch::x86_64::{_pext_u64, _blsr_u64, _mm512_loadu_epi64, _mm512_popcnt_epi64, _mm512_reduce_add_epi64, _mm512_setzero_si512, _mm512_add_epi64, _mm512_loadu_epi8, _mm512_mask_compressstoreu_epi8}, slice::from_raw_parts};
 
 use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type, ToByteSlice}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray, GenericBinaryArray, GenericBinaryBuilder, UInt64Array}, record_batch::{RecordBatch, RecordBatchOptions}, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
 use serde::{Serialize, Deserialize};
@@ -211,69 +211,117 @@ impl PostingBatch {
         predicate: &BooleanEvalExpr,
         is_encoding: &Vec<bool>,
     ) -> Result<usize> {
-        
         let predicate = predicate.predicate.as_ref().unwrap().get();
         let predicate_ref = unsafe {predicate.as_ref().unwrap() };
         let valid_num = min_range.count_ones() as usize;
         
         let mut batches: Vec<Option<Vec<Chunk>>> = vec![None; indices.len()];
-        let compress_index = unsafe {
-            _mm512_loadu_epi8(COMPRESS_INDEX.as_ptr() as *const i8)
-        };
-        debug!("start select valid batch");
-        for (j, (index, encoding)) in indices.iter().zip(is_encoding.into_iter()).enumerate() {
-            let distri = unsafe { distris.get_unchecked(j).unwrap_unchecked() };
-            let write_mask = unsafe { _pext_u64(min_range, distri ) };
-            let valid_mask = unsafe { _pext_u64(distri, min_range) };
-
-            let idx = unsafe { index.unwrap_unchecked() as usize };
-
-            let bucket = if idx != usize::MAX {
-                self.postings.get(idx).ok_or_else(|| {
-                    FastErr::InternalErr(format!(
-                        "project index {} out of bounds, max field {}",
-                        idx,
-                        self.postings.len()
-                    ))
-                })?
-            } else {
-                continue;
-            };
-
-            let boundary = &self.boundary[idx];
-            if boundary_idx >= boundary.len() {
-                continue;
-            }
-            let start_idx = boundary[boundary_idx] as usize;
-            let mut posting = vec![Chunk::N0NE; valid_num];
-
-
-            let mut write_index: Vec<u8> = vec![0; valid_num];
-            let mut posting_index: Vec<u8> = vec![0; valid_num];
-            unsafe {
-                _mm512_mask_compressstoreu_epi8(write_index.as_mut_ptr() as *mut u8, valid_mask, compress_index);
-                _mm512_mask_compressstoreu_epi8(posting_index.as_mut_ptr() as *mut u8, write_mask, compress_index);
-            }
-
-            for (w, p) in write_index.into_iter().zip(posting_index.into_iter()){
-                let batch = bucket.value(start_idx + p as usize);
-                if batch.len() == 64 {
-                    posting[w as usize] = Chunk::Bitmap(unsafe { _mm512_loadu_epi64(batch.as_ptr() as *const i64)});
+        if valid_num < 16 {
+            debug!("start select valid batch");
+            let empty = unsafe { _mm512_setzero_si512() };
+            for (j, index) in indices.iter().enumerate() {
+                let distri = unsafe { distris.get_unchecked(j).unwrap_unchecked() };
+                let mut write_mask = unsafe { _pext_u64(min_range, distri )};
+                let valid_mask = unsafe { _pext_u64(distri, min_range) };
+                let idx = unsafe { index.unwrap_unchecked() as usize };
+                let bucket = if idx != usize::MAX {
+                    self.postings.get(idx).cloned().ok_or_else(|| {
+                        FastErr::InternalErr(format!(
+                            "project index {} out of bounds, max fields {}",
+                            idx,
+                            self.postings.len(),
+                        ))
+                    })?
                 } else {
-                    // means this's Integer list
-                    let batch = unsafe {batch.align_to::<u16>().1};
-                    if *encoding {
-                        let mut chunk: [u64; 8] = [0; 8];
-                        for &v in batch {
-                            chunk[(v as usize) / 64] |= 1 << ((v as usize) % 64);
+                    continue;
+                };
+                let boundary = &self.boundary[idx];
+                if boundary_idx >= boundary.len() {
+                    continue;
+                }
+                let start_idx = boundary[boundary_idx] as usize;
+                let mut posting = Vec::with_capacity(valid_num);
+                for i in 0..valid_num {
+                    if valid_mask & (1 << i) != 0 {
+                        let pos = write_mask.trailing_zeros() as usize;
+                        write_mask = clear_lowest_set_bit(write_mask);
+                        let batch = bucket.value(start_idx + pos);
+                        if batch.len() == 64 {
+                            let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u64, 8) };
+                            posting.push(Chunk::Bitmap(unsafe { _mm512_loadu_epi64(batch.as_ptr() as *const i64) }));
+                        } else {
+                            let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u16, batch.len() / 2) };
+                            let mut bitmap: [u64; 8] = [0; 8];
+                            for off in batch {
+                                bitmap[(*off >> 6) as usize] |= 1 << (*off % (1 << 6));
+                            }
+                            posting.push(Chunk::Bitmap(unsafe { _mm512_loadu_epi64(bitmap.as_ptr() as *const i64)}));
                         }
-                        posting[w as usize] = Chunk::Bitmap(unsafe { _mm512_loadu_epi64(chunk.as_ptr() as *const i64)});
                     } else {
-                        posting[w as usize] = Chunk::IDs(batch);
+                        posting.push(Chunk::Bitmap(empty));
                     }
                 }
+                batches[j] = Some(posting);
             }
-            batches[j] = Some(posting);
+        } else {
+            debug!("start select valid batch");
+            let compress_index = unsafe {
+                _mm512_loadu_epi8(COMPRESS_INDEX.as_ptr() as *const i8)
+            };
+            for (j, (index, encoding)) in indices.iter().zip(is_encoding.into_iter()).enumerate() {
+                let distri = unsafe { distris.get_unchecked(j).unwrap_unchecked() };
+                let write_mask = unsafe { _pext_u64(min_range, distri ) };
+                let valid_mask = unsafe { _pext_u64(distri, min_range) };
+
+                let idx = unsafe { index.unwrap_unchecked() as usize };
+
+                let bucket = if idx != usize::MAX {
+                    self.postings.get(idx).ok_or_else(|| {
+                        FastErr::InternalErr(format!(
+                            "project index {} out of bounds, max field {}",
+                            idx,
+                            self.postings.len()
+                        ))
+                    })?
+                } else {
+                    continue;
+                };
+
+                let boundary = &self.boundary[idx];
+                if boundary_idx >= boundary.len() {
+                    continue;
+                }
+                let start_idx = boundary[boundary_idx] as usize;
+                let mut posting = vec![Chunk::N0NE; valid_num];
+
+
+                let mut write_index: Vec<u8> = vec![0; valid_num];
+                let mut posting_index: Vec<u8> = vec![0; valid_num];
+                unsafe {
+                    _mm512_mask_compressstoreu_epi8(write_index.as_mut_ptr() as *mut u8, valid_mask, compress_index);
+                    _mm512_mask_compressstoreu_epi8(posting_index.as_mut_ptr() as *mut u8, write_mask, compress_index);
+                }
+
+                for (w, p) in write_index.into_iter().zip(posting_index.into_iter()){
+                    let batch = bucket.value(start_idx + p as usize);
+                    if batch.len() == 64 {
+                        posting[w as usize] = Chunk::Bitmap(unsafe { _mm512_loadu_epi64(batch.as_ptr() as *const i64)});
+                    } else {
+                        // means this's Integer list
+                        let batch = unsafe {batch.align_to::<u16>().1};
+                        if *encoding {
+                            let mut chunk: [u64; 8] = [0; 8];
+                            for &v in batch {
+                                chunk[(v as usize) / 64] |= 1 << ((v as usize) % 64);
+                            }
+                            posting[w as usize] = Chunk::Bitmap(unsafe { _mm512_loadu_epi64(chunk.as_ptr() as *const i64)});
+                        } else {
+                            posting[w as usize] = Chunk::IDs(batch);
+                        }
+                    }
+                }
+                batches[j] = Some(posting);
+            }
         }
         debug!("start eval");
         let eval = predicate_ref.eval_avx512(&batches, None, true)?;
