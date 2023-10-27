@@ -3,7 +3,7 @@ use std::{sync::Arc, ops::Index, collections::BTreeMap, mem::size_of_val, ptr::N
 use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type, ToByteSlice}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray, GenericBinaryArray, GenericBinaryBuilder, UInt64Array}, record_batch::{RecordBatch, RecordBatchOptions}, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
 use serde::{Serialize, Deserialize};
 use tracing::{debug, info};
-use crate::{utils::{Result, FastErr}, physical_expr::{BooleanEvalExpr, boolean_eval::{Chunk, TempChunk}}};
+use crate::{utils::{Result, FastErr, vec::{store_advance_aligned, set_vec_len_by_ptr}}, physical_expr::{BooleanEvalExpr, boolean_eval::{Chunk, TempChunk}}};
 
 
 /// The doc_id range [start, end) Batch range determines the  of relevant batch.
@@ -241,6 +241,7 @@ impl PostingBatch {
                 }
                 let start_idx = boundary[boundary_idx] as usize;
                 let mut posting = Vec::with_capacity(valid_num);
+                let mut posting_ptr = posting.as_mut_ptr();
                 for i in 0..valid_num {
                     if valid_mask & (1 << i) != 0 {
                         let pos = write_mask.trailing_zeros() as usize;
@@ -248,19 +249,22 @@ impl PostingBatch {
                         let batch = bucket.value(start_idx + pos);
                         if batch.len() == 64 {
                             let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u64, 8) };
-                            posting.push(Chunk::Bitmap(unsafe { _mm512_loadu_epi64(batch.as_ptr() as *const i64) }));
+                            unsafe { store_advance_aligned(Chunk::Bitmap(_mm512_loadu_epi64(batch.as_ptr() as *const i64) ), &mut posting_ptr) };
                         } else {
                             let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u16, batch.len() / 2) };
                             let mut bitmap: [u64; 8] = [0; 8];
                             for off in batch {
                                 bitmap[(*off >> 6) as usize] |= 1 << (*off % (1 << 6));
                             }
-                            posting.push(Chunk::Bitmap(unsafe { _mm512_loadu_epi64(bitmap.as_ptr() as *const i64)}));
+                            unsafe { store_advance_aligned(Chunk::Bitmap(_mm512_loadu_epi64(bitmap.as_ptr() as *const i64)), &mut posting_ptr) };
                         }
                     } else {
-                        posting.push(Chunk::Bitmap(empty));
+                        unsafe {
+                          store_advance_aligned(Chunk::Bitmap(empty), &mut posting_ptr);  
+                        }
                     }
                 }
+                unsafe { set_vec_len_by_ptr(&mut posting, posting_ptr)}
                 batches[j] = Some(posting);
             }
         } else {
@@ -269,9 +273,6 @@ impl PostingBatch {
                 _mm512_loadu_epi8(COMPRESS_INDEX.as_ptr() as *const i8)
             };
             for (j, (index, encoding)) in indices.iter().zip(is_encoding.into_iter()).enumerate() {
-                let distri = unsafe { distris.get_unchecked(j).unwrap_unchecked() };
-                let write_mask = unsafe { _pext_u64(min_range, distri ) };
-                let valid_mask = unsafe { _pext_u64(distri, min_range) };
 
                 let idx = unsafe { index.unwrap_unchecked() as usize };
 
@@ -291,12 +292,15 @@ impl PostingBatch {
                 if boundary_idx >= boundary.len() {
                     continue;
                 }
+                let distri = unsafe { distris.get_unchecked(j).unwrap_unchecked() };
+                let write_mask = unsafe { _pext_u64(min_range, distri ) };
+                let valid_mask = unsafe { _pext_u64(distri, min_range) };
+
                 let start_idx = boundary[boundary_idx] as usize;
                 let mut posting = vec![Chunk::N0NE; valid_num];
 
-
-                let mut write_index: Vec<u8> = vec![0; valid_num];
-                let mut posting_index: Vec<u8> = vec![0; valid_num];
+                let mut write_index: Vec<u8> = vec![0; valid_mask.count_ones() as usize];
+                let mut posting_index: Vec<u8> = vec![0; write_mask.count_ones() as usize];
                 unsafe {
                     _mm512_mask_compressstoreu_epi8(write_index.as_mut_ptr() as *mut u8, valid_mask, compress_index);
                     _mm512_mask_compressstoreu_epi8(posting_index.as_mut_ptr() as *mut u8, write_mask, compress_index);
@@ -305,7 +309,7 @@ impl PostingBatch {
                 for (w, p) in write_index.into_iter().zip(posting_index.into_iter()){
                     let batch = bucket.value(start_idx + p as usize);
                     if batch.len() == 64 {
-                        posting[w as usize] = Chunk::Bitmap(unsafe { _mm512_loadu_epi64(batch.as_ptr() as *const i64)});
+                        unsafe { store_advance_aligned(Chunk::Bitmap(_mm512_loadu_epi64(batch.as_ptr() as *const i64)), &mut posting.as_mut_ptr().offset(w as isize))};
                     } else {
                         // means this's Integer list
                         let batch = unsafe {batch.align_to::<u16>().1};
@@ -314,9 +318,9 @@ impl PostingBatch {
                             for &v in batch {
                                 chunk[(v as usize) / 64] |= 1 << ((v as usize) % 64);
                             }
-                            posting[w as usize] = Chunk::Bitmap(unsafe { _mm512_loadu_epi64(chunk.as_ptr() as *const i64)});
+                            unsafe { store_advance_aligned(Chunk::Bitmap(_mm512_loadu_epi64(chunk.as_ptr() as *const i64)), &mut posting.as_mut_ptr().offset(w as isize))}
                         } else {
-                            posting[w as usize] = Chunk::IDs(batch);
+                            unsafe { store_advance_aligned(Chunk::IDs(batch), &mut posting.as_mut_ptr().offset(w as isize)) };
                         }
                     }
                 }
