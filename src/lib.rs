@@ -5,6 +5,7 @@
 #![feature(sync_unsafe_cell)]
 #![feature(slice_flatten)]
 #![feature(ptr_metadata)]
+#![feature(once_cell)]
 
 extern crate datafusion;
 
@@ -17,13 +18,17 @@ pub mod query;
 pub mod context;
 pub mod batch;
 pub mod physical_expr;
+use jemallocator::Jemalloc;
 pub use utils::Result;
 pub use context::BooleanContext;
 pub use optimizer::{BooleanPhysicalPlanner, MinOperationRange, PartitionPredicateReorder, RewriteBooleanPredicate, PrimitivesCombination};
 pub use physical_expr::ShortCircuit;
 use clap::{Parser, ValueEnum};
 
-const JIT_MAX_NODES: usize = 8;
+// #[global_allocator]
+// static GLOBAL: Jemalloc = Jemalloc;
+
+const JIT_MAX_NODES: usize = 6;
 
 #[derive(Parser, Debug)]
 pub struct FastArgs {

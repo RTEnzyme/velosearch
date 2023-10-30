@@ -5,7 +5,7 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [workspace]
-members = ["adaptive_hybrid_trie", "cranelift", "cranelift_jit", "cranelift_module", "cranelift_native"]
+members = ["adaptive_hybrid_trie"]
 
 [features]
 default = ["trie_idx"]
@@ -30,20 +30,18 @@ rayon = "1.7"
 chrono = "0.4"
 parking_lot = "0.12"
 adaptive_hybrid_trie = {path="adaptive_hybrid_trie"}
-cranelift = {path = "cranelift" }
-cranelift-jit = { path = "./cranelift_jit" }
-cranelift-module = { path = "./cranelift_module" }
-cranelift-native = { path = "./cranelift_native" }
-# cranelift = "0.99"
-# cranelift-jit = "0.99"
-# cranelift-module = "0.99"
-# cranelift-native = "0.99"
+cranelift = "0.100"
+cranelift-jit = {version = "0.100", features = ["selinux-fix"] }
+cranelift-module = "0.100"
+cranelift-native = "0.100"
 tantivy = "0.19"
 criterion = {version = "0.5", features = ["html_reports"]}
 sorted-iter = "0.1.11"
 lazy_static = "1.4"
 bincode = "1.3"
 dashmap = "5.5"
+jemallocator = "0.5.4"
+mimalloc = "0.1.39"
 
 [[bench]]
 name = "arrow_bitwise_and"
@@ -73,10 +71,10 @@ harness = false
 #name = "vectorized_codegen"
 #harness = false
 
-# [profile.release]
-# lto = true
-# opt-level = 3
-# overflow-checks = false
+ [profile.release]
+ lto = "fat"
+ opt-level = 3
+ overflow-checks = false
 
 [target.x86_64-unknown-linux-gnu]
 linker = "/usr/bin/clang"

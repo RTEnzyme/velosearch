@@ -74,13 +74,14 @@ pub fn jit_short_circuit_primitive(
     assembler: &Assembler,
     jit_expr: Boolean,
     leaf_num: usize,
+    louds: u32,
 ) -> Result<GeneratedFunction> {
     let jit_expr = JITExpr::Boolean(jit_expr);
     // Alias pointer type.
     // The raw pointer `R64` or `R32` is not compatible with integers
     const PTR_TYPE: JITType = I64;
 
-    let builder = assembler.new_func_builder("short_circuit_primitive");
+    let builder = assembler.new_func_builder(format!("short_circuit_primitive_{:}", louds));
     // Declare in-param
     // Each input takes one position, following by a pointer to place result,
     // and the last is the length of inputs/output arrays.
@@ -101,7 +102,7 @@ pub fn jit_short_circuit_primitive(
     fn_body.declare_as("index", fn_body.lit_i64(0))?;
     // fn_body.declare("offset", I64)?;
     fn_body.while_block(
-        |cond| cond.lt(cond.id("index")?, cond.id("len")?),
+        |cond| cond.lt(cond.id("index")?, cond.lit_i64(8)),
         |b| {
             b.declare_as("offset", b.mul(b.id("index")?, b.lit_i64(8))?)?;
             // b.declare_as("offset", b.mul(b.id("index")?, b.lit_i64(8))?)?;
@@ -295,7 +296,7 @@ mod test {
 
         // Compile and run JIT code
         let assembler = Assembler::default();
-        let gen_func = jit_short_circuit_primitive(&assembler, jit_expr, 4).unwrap();
+        let gen_func = jit_short_circuit_primitive(&assembler, jit_expr, 4, 0).unwrap();
 
         let mut jit = assembler.create_jit();
         let gen_func = jit.compile(gen_func).unwrap();
@@ -342,7 +343,7 @@ mod test {
 
         // Compile and run JIT code
         let assembler = Assembler::default();
-        let gen_func = jit_short_circuit_primitive(&assembler, jit_expr, 4).unwrap();
+        let gen_func = jit_short_circuit_primitive(&assembler, jit_expr, 4, 0).unwrap();
 
         let mut jit = assembler.create_jit();
         let gen_func = jit.compile(gen_func).unwrap();

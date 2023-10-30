@@ -174,19 +174,20 @@ impl PostingBatch {
                     continue
                 }
                 let batch = posting.value(start_idx + i);
-                if batch.len() == 64 {
-                    let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u64, 8) };
-                    valid_batch[(write_pos * 8)..(write_pos * 8 + 8)].copy_from_slice(batch);
-                } else {
-                    // means this's Integer list
-                    let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u16, batch.len() / 2)};
-                    //  means this's bitmap
-                    let mut bitmap = [0; CHUNK_SIZE];
-                    for off in batch {
-                        bitmap[(*off >> 6) as usize] |= 1 << (*off % (1 << 6));
-                    }
-                    valid_batch[(write_pos * 8)..(write_pos * 8 + 8)].copy_from_slice(&bitmap);
-                }
+                // if batch.len() == 64 {
+                //     let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u64, 8) };
+                //     valid_batch[(write_pos * 8)..(write_pos * 8 + 8)].copy_from_slice(batch);
+                // } else {
+                //     // means this's Integer list
+                //     let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u16, batch.len() / 2)};
+                //     //  means this's bitmap
+                //     let mut bitmap = [0; CHUNK_SIZE];
+                //     for off in batch {
+                //         bitmap[(*off >> 6) as usize] |= 1 << (*off % (1 << 6));
+                //     }
+                //     valid_batch[(write_pos * 8)..(write_pos * 8 + 8)].copy_from_slice(&bitmap);
+                // }
+                valid_batch[write_pos] = batch.len() as u64;
                 write_pos = write_mask.trailing_zeros() as usize;
                 write_mask = clear_lowest_set_bit(write_mask);
             }
@@ -209,124 +210,79 @@ impl PostingBatch {
         boundary_idx: usize,
         min_range: u64,
         predicate: &BooleanEvalExpr,
-        is_encoding: &Vec<bool>,
+        _is_encoding: &Vec<bool>,
     ) -> Result<usize> {
         let predicate = predicate.predicate.as_ref().unwrap().get();
         let predicate_ref = unsafe {predicate.as_ref().unwrap() };
         let valid_num = min_range.count_ones() as usize;
         
         let mut batches: Vec<Option<Vec<Chunk>>> = vec![None; indices.len()];
-        if valid_num < 16 {
-            debug!("start select valid batch");
-            let empty = unsafe { _mm512_setzero_si512() };
-            for (j, index) in indices.iter().enumerate() {
-                let distri = unsafe { distris.get_unchecked(j).unwrap_unchecked() };
-                let mut write_mask = unsafe { _pext_u64(min_range, distri )};
-                let valid_mask = unsafe { _pext_u64(distri, min_range) };
-                let idx = unsafe { index.unwrap_unchecked() as usize };
-                let bucket = if idx != usize::MAX {
-                    self.postings.get(idx).cloned().ok_or_else(|| {
-                        FastErr::InternalErr(format!(
-                            "project index {} out of bounds, max fields {}",
-                            idx,
-                            self.postings.len(),
-                        ))
-                    })?
-                } else {
-                    continue;
-                };
-                let boundary = &self.boundary[idx];
-                if boundary_idx >= boundary.len() {
-                    continue;
-                }
-                let start_idx = boundary[boundary_idx] as usize;
-                let mut posting = Vec::with_capacity(valid_num);
-                let mut posting_ptr = posting.as_mut_ptr();
-                for i in 0..valid_num {
-                    if valid_mask & (1 << i) != 0 {
-                        let pos = write_mask.trailing_zeros() as usize;
-                        write_mask = clear_lowest_set_bit(write_mask);
-                        let batch = bucket.value(start_idx + pos);
-                        if batch.len() == 64 {
-                            let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u64, 8) };
-                            unsafe { store_advance_aligned(Chunk::Bitmap(_mm512_loadu_epi64(batch.as_ptr() as *const i64) ), &mut posting_ptr) };
-                        } else {
-                            let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u16, batch.len() / 2) };
-                            let mut bitmap: [u64; 8] = [0; 8];
-                            for off in batch {
-                                bitmap[(*off >> 6) as usize] |= 1 << (*off % (1 << 6));
-                            }
-                            unsafe { store_advance_aligned(Chunk::Bitmap(_mm512_loadu_epi64(bitmap.as_ptr() as *const i64)), &mut posting_ptr) };
-                        }
-                    } else {
-                        unsafe {
-                          store_advance_aligned(Chunk::Bitmap(empty), &mut posting_ptr);  
-                        }
-                    }
-                }
-                unsafe { set_vec_len_by_ptr(&mut posting, posting_ptr)}
-                batches[j] = Some(posting);
-            }
-        } else {
-            debug!("start select valid batch");
-            let compress_index = unsafe {
-                _mm512_loadu_epi8(COMPRESS_INDEX.as_ptr() as *const i8)
-            };
-            for (j, (index, encoding)) in indices.iter().zip(is_encoding.into_iter()).enumerate() {
-
-                let idx = unsafe { index.unwrap_unchecked() as usize };
-
-                let bucket = if idx != usize::MAX {
-                    self.postings.get(idx).ok_or_else(|| {
-                        FastErr::InternalErr(format!(
-                            "project index {} out of bounds, max field {}",
-                            idx,
-                            self.postings.len()
-                        ))
-                    })?
-                } else {
-                    continue;
-                };
-
-                let boundary = &self.boundary[idx];
-                if boundary_idx >= boundary.len() {
-                    continue;
-                }
-                let distri = unsafe { distris.get_unchecked(j).unwrap_unchecked() };
-                let write_mask = unsafe { _pext_u64(min_range, distri ) };
-                let valid_mask = unsafe { _pext_u64(distri, min_range) };
-
-                let start_idx = boundary[boundary_idx] as usize;
-                let mut posting = vec![Chunk::N0NE; valid_num];
-
-                let mut write_index: Vec<u8> = vec![0; valid_mask.count_ones() as usize];
-                let mut posting_index: Vec<u8> = vec![0; write_mask.count_ones() as usize];
+        debug!("start select valid batch");
+        const EMPTY: [u64; 8] = [0; 8];
+        for (j, index) in indices.iter().enumerate() {
+            let distri = unsafe { distris.get_unchecked(j).unwrap_unchecked() };
+            let mut write_mask = unsafe { _pext_u64(min_range, distri )};
+            let valid_mask = unsafe { _pext_u64(distri, min_range) };
+            let idx = unsafe { index.unwrap_unchecked() as usize };
+            let bucket = if idx != usize::MAX {
                 unsafe {
-                    _mm512_mask_compressstoreu_epi8(write_index.as_mut_ptr() as *mut u8, valid_mask, compress_index);
-                    _mm512_mask_compressstoreu_epi8(posting_index.as_mut_ptr() as *mut u8, write_mask, compress_index);
+                self.postings.get(idx).cloned().ok_or_else(|| {
+                    FastErr::InternalErr(format!(
+                        "project index {} out of bounds, max fields {}",
+                        idx,
+                        self.postings.len(),
+                    ))
+                })?
                 }
+            } else {
+                continue;
+            };
+            let boundary = &self.boundary[idx];
+            if boundary_idx >= boundary.len() {
+                continue;
+            }
+            let start_idx = unsafe { *boundary.get_unchecked(boundary_idx) as usize };
+            let mut posting = Vec::with_capacity(valid_num);
+            let mut posting_ptr = posting.as_mut_ptr();
 
-                for (w, p) in write_index.into_iter().zip(posting_index.into_iter()){
-                    let batch = bucket.value(start_idx + p as usize);
+            for i in 0..valid_num {
+                if valid_mask & (1 << i) != 0 {
+                    let pos = write_mask.trailing_zeros() as usize;
+                    write_mask = clear_lowest_set_bit(write_mask);
+                    let batch = bucket.value(start_idx + pos);
                     if batch.len() == 64 {
-                        unsafe { store_advance_aligned(Chunk::Bitmap(_mm512_loadu_epi64(batch.as_ptr() as *const i64)), &mut posting.as_mut_ptr().offset(w as isize))};
+                        let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u64, 8) };
+                        unsafe { store_advance_aligned(Chunk::Bitmap(batch), &mut posting_ptr) };
                     } else {
-                        // means this's Integer list
-                        let batch = unsafe {batch.align_to::<u16>().1};
-                        if *encoding {
-                            let mut chunk: [u64; 8] = [0; 8];
-                            for &v in batch {
-                                chunk[(v as usize) / 64] |= 1 << ((v as usize) % 64);
-                            }
-                            unsafe { store_advance_aligned(Chunk::Bitmap(_mm512_loadu_epi64(chunk.as_ptr() as *const i64)), &mut posting.as_mut_ptr().offset(w as isize))}
-                        } else {
-                            unsafe { store_advance_aligned(Chunk::IDs(batch), &mut posting.as_mut_ptr().offset(w as isize)) };
-                        }
+                        let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u16, batch.len() / 2) };
+                        // if !encoding {
+                            unsafe { store_advance_aligned(Chunk::IDs(batch), &mut posting_ptr) };
+                        // } else {
+                        //     let mut bitmap: [u64; 8] = [0; 8];
+                        //     for off in batch {
+                        //         unsafe {
+                        //             *bitmap.get_unchecked_mut((*off >> 6) as usize) |= 1 << (*off % (1 << 6));
+                        //         }
+                        //     }
+                        //     // leak_pool.push(bitmap);
+                        //     // let bitmap = Arc::new(bitmap);
+                        //     std::mem::forget(bitmap);
+                        //     unsafe { store_advance_aligned(Chunk::Bitmap(
+                        //         from_raw_parts(bitmap.as_ptr() as *const u64, 8)
+                        //         // from_raw_parts(leak_pool.last().unwrap().as_ptr() as *const u64, 8)
+                        //     ), &mut posting_ptr) };
+                        // }
+                    }
+                } else {
+                    unsafe {
+                        store_advance_aligned(Chunk::Bitmap(&EMPTY), &mut posting_ptr);  
                     }
                 }
-                batches[j] = Some(posting);
             }
+            unsafe { set_vec_len_by_ptr(&mut posting, posting_ptr)}
+            batches[j] = Some(posting);
         }
+        
         debug!("start eval");
         let eval = predicate_ref.eval_avx512(&batches, None, true)?;
         debug!("end eval");
@@ -347,8 +303,10 @@ impl PostingBatch {
                     TempChunk::N0NE => {},
                 }
             });
-            let sum = unsafe { _mm512_reduce_add_epi64(accumulator) } as usize + id_acc;
+            // let sum = unsafe { _mm512_reduce_add_epi64(accumulator) } as usize + id_acc;
+            let sum = id_acc;
             debug!("sum: {:}", sum);
+            // let sum = 0;
             Ok(sum)
         } else {
             Ok(0)

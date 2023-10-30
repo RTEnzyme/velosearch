@@ -337,7 +337,7 @@ impl Stream for PostingStream {
                     continue;
                 }
                 let distris: Vec<Option<u64>> = self.distris.iter()
-                    .map(|v| {
+                    .map(|v| { 
                         match v {
                             Some(v) => {
                                 Some(v.values().get(self.index).unwrap().clone())
@@ -359,7 +359,7 @@ impl Stream for PostingStream {
                 let batch = RecordBatch::try_new(
                     Arc::new(Schema::new(vec![Field::new("mask", DataType::UInt64, false)])),
                     vec![
-                        Arc::new(UInt64Array::from(vec![batch as u64])),
+                        Arc::new(UInt64Array::from_value(batch as u64, 1)),
                     ]
                 )?;
 

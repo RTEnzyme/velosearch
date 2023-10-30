@@ -47,10 +47,10 @@ impl ShortCircuit {
             predicate_2_louds(cnf, &mut builder);
             let louds = builder.build();
             debug!("louds: {:b}", louds);
-            let primitive = AOT_PRIMITIVES[&louds];
+            let primitive = AOT_PRIMITIVES.get(&louds).expect(&format!("Can't find louds: {:b}", louds));
             let batch_idx = convert_predicate(&cnf).1;
             return Self {
-                primitive,
+                primitive: *primitive,
                 batch_idx
             };
         }
@@ -75,43 +75,42 @@ impl ShortCircuit {
 
     pub fn eval_avx512(&self, init_v: Option<Vec<TempChunk>>, batch: &Vec<Option<Vec<Chunk>>>) -> Vec<TempChunk> {
         debug!("Eval by short_circuit_primitives");
-        let empty = unsafe { _mm512_setzero_si512()};
         let batch_len = batch[self.batch_idx[0]].as_ref().unwrap().len();
-        let batches: Vec<*const u8> = self.batch_idx
-            .iter()
-            .map(|v| {batch[*v].as_ref().unwrap().as_ptr() as *const u8})
-            .collect();
-        let init_v = match &init_v {
-            Some(v) => {
-                Some(v.into_iter()
-                .map(|v| match v {
-                    TempChunk::Bitmap(b) => *b,
-                    TempChunk::IDs(ids) => {
-                        let mut chunk = [0 as u64; 8];
-                        for id in ids {
-                            chunk[(*id as usize) >> 8] |= 1 << ((*id as usize) % 64);
-                        }
-                        unsafe { _mm512_loadu_epi64(chunk.as_ptr() as *const i64 )}
-                    }
-                    TempChunk::N0NE => empty,
-                })
-                .collect::<Vec<__m512i>>())
-            },
-            None => None,
-        };
-        let init_ptr = match &init_v {
-            Some(init) => init.as_ptr() as *const u8,
-            None => batches[0],
-        };
         let mut res: Vec<u64> = vec![0; batch_len * 8];
         
-        (self.primitive)(
-            batches.as_ptr() as *const *const u8,
-            init_ptr,
-            res.as_mut_ptr() as *mut u8,
-            batch_len as i64 * 8,
-        );
-    
+        let batches: Vec<&Vec<Chunk>> = self.batch_idx
+                .iter()
+                .map(|v| {
+                    unsafe { 
+                        batch[*v].as_ref().unwrap_unchecked()
+                    }
+                })
+                .collect();
+        let mut leak_list: Vec<[u64; 8]> = vec![[0; 8]; batch.len()];
+        for i in 0..batch_len {
+            let batch: Vec<*const u8> = batches.iter().enumerate()
+            .map(|(n, v)| unsafe { 
+                match v.get_unchecked(i) {
+                    Chunk::Bitmap(b) => (*b).as_ptr() as *const u8,
+                    Chunk::IDs(ids) => {
+                        leak_list[n].fill(0);
+                        let bitmap = leak_list.get_unchecked_mut(n);
+                        for off in *ids {
+                                *bitmap.get_unchecked_mut((*off >> 6) as usize) |= 1 << (*off % (1 << 6));
+                        }
+                        bitmap.as_ptr() as *const u8
+                    }
+                    _ => unreachable!()
+                }
+            })
+            .collect();
+            (self.primitive)( 
+                batch.as_ptr() as *const *const u8,
+                batch[0] as *const u8,
+                unsafe { res.as_mut_ptr().offset(i as isize * 8) } as *mut u8,
+                8,
+            );
+        }
 
         debug!("end eval");
         (0..batch_len).into_iter()

@@ -35,7 +35,9 @@ lazy_static!{
         // } else {
             info!("start AOT compilation");
             let mut map = HashMap::new();
-            for n in 2..JIT_MAX_NODES {
+            let assembler = Assembler::default();
+            let mut jit = assembler.create_jit();
+            for n in 2..=JIT_MAX_NODES {
                 for l in 1..(1 << n) {
                     let mut louds = (n as u32) << 28;
                     louds |= l << 14;
@@ -45,43 +47,52 @@ lazy_static!{
                         let boolean = builder.build();
                         let leaf_num = builder.leaf_num();
                         if let Some(b) = boolean {
+                            let gen_func = jit_short_circuit_primitive(&assembler, b, leaf_num, louds).unwrap();
+                            let gen_func = jit.compile(gen_func).unwrap();
+                            let code_fn = unsafe {
+                                core::mem::transmute::<_, fn(*const *const u8, *const u8, *mut u8, i64)>(gen_func)
+                            };
                             debug!("louds: {:b}", louds);
-                            map.insert(louds, aot_short_circuit(b, leaf_num).unwrap());
+                            // let code_fn = unsafe {
+                            //     core::mem::transmute::<_, fn(*const *const u8, *const u8, *mut u8, i64)->()>()
+                            // };
+                            map.insert(louds, code_fn);
                         }
                     }
                 }
             }
-            let file = File::create("aot3.bin").expect("Unable to create file.");
-            let writer = std::io::BufWriter::new(file);
-            bincode::serialize_into(writer, &map).expect("Unable to serialize data");
-            map.into_iter()
-            .map(|(k, v)| {
-                let func = {
-                    let ptr = v.as_ptr();
-                    let code_fn = unsafe {
-                        core::mem::transmute::<_, fn(*const *const u8, *const u8, *mut u8, i64)->()>(ptr)
-                    };
-                    std::mem::forget(v);
-                    code_fn
-                };
-                (k, func)
-            })
-            .collect()
+            // let file = File::create("aot3.bin").expect("Unable to create file.");
+            // let writer = std::io::BufWriter::new(file);
+            // bincode::serialize_into(writer, &map).expect("Unable to serialize data");
+            // map.into_iter()
+            // .map(|(k, v)| {
+            //     let func = {
+            //         let ptr = v.as_ptr();
+            //         let code_fn = unsafe {
+            //             core::mem::transmute::<_, fn(*const *const u8, *const u8, *mut u8, i64)->()>(ptr)
+            //         };
+            //         std::mem::forget(v);
+            //         code_fn
+            //     };
+            //     (k, func)
+            // })
+            // .collect()
+            map
         // }
     };
 }
 
-pub fn aot_short_circuit(expr: Boolean, leaf_num: usize) -> Result<Vec<u8>> {
-    let assembler = Assembler::default();
-    let gen_func = jit_short_circuit_primitive(&assembler, expr, leaf_num)?;
+// pub fn aot_short_circuit(expr: Boolean, leaf_num: usize) -> Result<Vec<u8>> {
+//     let assembler = Assembler::default();
+//     let gen_func = jit_short_circuit_primitive(&assembler, expr, leaf_num)?;
 
-    let mut jit = assembler.create_jit();
-    jit.compile_to_bytes(gen_func)
-}
+//     let mut jit = assembler.create_jit();
+//     jit.compile_to_bytes(gen_func)
+// }
 
 pub fn jit_short_circuit(expr: Boolean, leaf_num: usize) -> Result<fn(*const *const u8, *const u8, *mut u8, i64)> {
     let assembler = Assembler::default();
-    let gen_func = jit_short_circuit_primitive(&assembler, expr, leaf_num)?;
+    let gen_func = jit_short_circuit_primitive(&assembler, expr, leaf_num, 0)?;
 
     let mut jit = assembler.create_jit();
     let gen_func = jit.compile(gen_func)?;

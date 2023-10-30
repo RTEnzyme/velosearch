@@ -2,7 +2,11 @@ use std::{env, sync::Arc};
 
 use datafusion::{sql::TableReference, datasource::provider_as_source, common::cast::as_uint64_array};
 use fastfull_search::{utils::{Result, builder::deserialize_posting_table}, BooleanContext, jit::AOT_PRIMITIVES, query::boolean_query::BooleanPredicateBuilder};
+use jemallocator::Jemalloc;
 use tantivy::tokenizer::{TextAnalyzer, SimpleTokenizer, RemoveLongFilter, LowerCaser, Stemmer};
+
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 #[tokio::main]
 async fn main() {

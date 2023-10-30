@@ -1,4 +1,4 @@
-use std::{sync::Arc, any::Any, cell::SyncUnsafeCell, arch::x86_64::{__m512i, _mm512_and_epi64, _mm512_or_epi64}};
+use std::{sync::Arc, any::Any, cell::SyncUnsafeCell, arch::x86_64::{__m512i, _mm512_and_epi64, _mm512_or_epi64, _mm512_loadu_epi64}, slice::from_raw_parts};
 
 use dashmap::DashSet;
 use datafusion::{physical_plan::{expressions::{BinaryExpr, Column}, PhysicalExpr, ColumnarValue}, arrow::{datatypes::{Schema, DataType}, record_batch::RecordBatch, array::UInt64Array}, error::DataFusionError, common::{Result, cast::as_uint64_array}};
@@ -16,7 +16,7 @@ pub enum Primitives {
 
 #[derive(Clone, Debug)]
 pub enum Chunk<'a> {
-    Bitmap(__m512i),
+    Bitmap(&'a [u64]),
     IDs(&'a [u16]),
     N0NE,
 }
@@ -169,7 +169,8 @@ impl PhysicalPredicate {
                                     for (a, b) in e.iter_mut().zip(i.into_iter()) {
                                         match (&a, b) {
                                             (TempChunk::Bitmap(a_bm), Chunk::Bitmap(b_bm)) => {
-                                                *a = TempChunk::Bitmap(unsafe { _mm512_and_epi64(*a_bm, *b_bm) })
+                                                let b_bm = unsafe { _mm512_loadu_epi64((*b_bm).as_ptr() as *const i64)};
+                                                *a = TempChunk::Bitmap(unsafe { _mm512_and_epi64(*a_bm, b_bm) })
                                             }
                                             (TempChunk::Bitmap(a_bm), Chunk::IDs(b)) => {
                                                 let mut a_id = unsafe { U64x8{ vector: *a_bm }.vals };
@@ -179,11 +180,10 @@ impl PhysicalPredicate {
                                                 *a = TempChunk::Bitmap(unsafe { U64x8 { vals: a_id }.vector })
                                             }
                                             (TempChunk::IDs(a_id), Chunk::Bitmap(b_bm)) => {
-                                                let b = unsafe {U64x8{ vector: *b_bm }.vals};
                                                 *a = TempChunk::IDs(
                                                     a_id.into_iter()
                                                     .filter(|v| {
-                                                        b[(**v as usize) >> 8] & (1 << (**v as usize % 64)) != 0
+                                                        b_bm[(**v as usize) >> 8] & (1 << (**v as usize % 64)) != 0
                                                     })
                                                     .map(|v| *v)
                                                     .collect()
@@ -206,7 +206,7 @@ impl PhysicalPredicate {
                                         i.into_iter()
                                         .map(|a| match a {
                                                 Chunk::Bitmap(b) => {
-                                                    TempChunk::Bitmap(*b)
+                                                    TempChunk::Bitmap(unsafe { _mm512_loadu_epi64((*b).as_ptr() as *const i64)})
                                                 }
                                                 Chunk::IDs(ids) => {
                                                     TempChunk::IDs(ids.to_vec())
@@ -224,16 +224,15 @@ impl PhysicalPredicate {
                                     for (a, b) in i.iter_mut().zip(e.into_iter()) {
                                         match (b, &a) {
                                             (Chunk::Bitmap(a_bm), TempChunk::Bitmap(b_bm)) => {
-                                                *a = TempChunk::Bitmap(unsafe { _mm512_or_epi64(*a_bm, *b_bm) })
+                                                let a_bm = load_u64_slice(a_bm);
+                                                *a = TempChunk::Bitmap(unsafe { _mm512_or_epi64(a_bm, *b_bm) })
                                             }
                                             (Chunk::Bitmap(a_bm), TempChunk::IDs(b_id)) => {
-                                                let mut bitmap = unsafe { U64x8{
-                                                    vector: *a_bm
-                                                }.vals };
+                                                let mut bitmap = (*a_bm).to_owned();
                                                 for id in b_id {
                                                     bitmap[(*id as usize) >> 8] |= 1 << ((*id as usize) % 64);
                                                 }
-                                                *a = TempChunk::Bitmap(unsafe { U64x8 { vals: bitmap }.vector })
+                                                *a = TempChunk::Bitmap(unsafe { _mm512_loadu_epi64(bitmap.as_ptr() as *const i64)})
                                             }
                                             (Chunk::IDs(a_id), TempChunk::Bitmap(b_bm)) => {
                                                 let mut b = unsafe { U64x8{ vector: *b_bm }.vals };
@@ -248,7 +247,7 @@ impl PhysicalPredicate {
                                                 *a = TempChunk::IDs(b_id.intersection(a_id).collect())
                                             }
                                             (Chunk::Bitmap(a_bm), TempChunk::N0NE) => {
-                                                *a = TempChunk::Bitmap(*a_bm)
+                                                *a = TempChunk::Bitmap(load_u64_slice(a_bm))
                                             }
                                             (Chunk::IDs(a_ids), TempChunk::N0NE) => {
                                                 *a = TempChunk::IDs(a_ids.to_vec())
@@ -447,6 +446,10 @@ impl PartialEq<dyn Any> for BooleanEvalExpr {
     fn eq(&self, _other: &dyn Any) -> bool {
         false
     }
+}
+#[inline(always)]
+fn load_u64_slice(bitmap: &&[u64]) -> __m512i {
+    unsafe { _mm512_loadu_epi64((*bitmap).as_ptr() as *const i64) }
 }
 
 #[cfg(test)]
