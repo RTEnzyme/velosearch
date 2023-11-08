@@ -67,6 +67,10 @@ harness = false
 name = "scalar_simd"
 harness = false
 
+[[bench]]
+name = "short_circuit"
+harness = false
+
 #[[bench]]
 #name = "vectorized_codegen"
 #harness = false

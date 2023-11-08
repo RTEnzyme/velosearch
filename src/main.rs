@@ -6,9 +6,9 @@ use jemallocator::Jemalloc;
 use mimalloc::MiMalloc;
 use tracing::{info, Level};
 
-#[global_allocator]
+// #[global_allocator]
 // static GLOBAL: Jemalloc = Jemalloc;
-static GLOBAL: MiMalloc = MiMalloc;
+// static GLOBAL: MiMalloc = MiMalloc;
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt().with_max_level(Level::INFO).init();

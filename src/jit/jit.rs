@@ -357,20 +357,24 @@ impl<'a> FunctionTranslator<'a> {
                 let mut body_block;
                 let else_block = self.builder.create_block();
                 self.builder.append_block_param(else_block, I64.native);
-                for expr in args {
+                let threshold_len = args.len() / 2;
+                let op_len = args.len();
+                for (idx, expr) in args.into_iter().enumerate() {
                     let leaf = self.translate_predicate(&expr,  offset, start_idx)?;
                     init_v = self.builder.ins().band(leaf, init_v);
-                    body_block = self.builder.create_block();
-                    self.builder.append_block_param(body_block, I64.native);
-                    self.builder.ins().brif(
-                        init_v,
-                        body_block,
-                        &[init_v],
-                        else_block,
-                        &[init_v],
-                    );
-                    self.builder.switch_to_block(body_block);
-                    self.builder.seal_block(body_block);
+                    if idx >= threshold_len && idx < op_len - 1 {
+                        body_block = self.builder.create_block();
+                        self.builder.append_block_param(body_block, I64.native);
+                        self.builder.ins().brif(
+                            init_v,
+                            body_block,
+                            &[init_v],
+                            else_block,
+                            &[init_v],
+                        );
+                        self.builder.switch_to_block(body_block);
+                        self.builder.seal_block(body_block);
+                    }
                 }
                 self.builder.ins().jump(else_block, &[init_v]);
                 self.builder.switch_to_block(else_block);

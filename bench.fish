@@ -1,5 +1,6 @@
-cargo build --release --bin do_query
-cp target/release/do_query ~/repo/boolean-query-benchmark/engines/fastful-search/
+echo "==========START COMPILE========="
+cargo build --release --bin do_query 2>/dev/null 
+cp target/release/do_query ~/repo/boolean-query-benchmark/engines/fastful-search/ 
 echo "==========START BENCH==========="
 pushd .
 cd ~/repo/boolean-query-benchmark

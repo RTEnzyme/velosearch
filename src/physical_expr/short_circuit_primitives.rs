@@ -1,9 +1,9 @@
-use std::{any::Any, ptr::NonNull, sync::Arc, arch::x86_64::{__m512i, _mm512_loadu_epi64, _mm512_setzero_si512}};
+use std::{any::Any, ptr::NonNull, sync::Arc, arch::x86_64::_mm512_loadu_epi64};
 
 use datafusion::{physical_plan::{PhysicalExpr, ColumnarValue}, arrow::{datatypes::DataType, record_batch::RecordBatch, array::{BooleanArray, ArrayData}, buffer::Buffer}, error::DataFusionError};
 use tracing::debug;
 
-use crate::{jit::{ast::{Predicate, Boolean}, jit_short_circuit, AOT_PRIMITIVES}, JIT_MAX_NODES, utils::avx512::U64x8};
+use crate::{jit::{ast::{Predicate, Boolean}, jit_short_circuit, AOT_PRIMITIVES}, JIT_MAX_NODES};
 use crate::utils::Result;
 
 use super::{boolean_eval::{PhysicalPredicate, Chunk, TempChunk}, Primitives};
@@ -87,6 +87,7 @@ impl ShortCircuit {
                 })
                 .collect();
         let mut leak_list: Vec<[u64; 8]> = vec![[0; 8]; batch.len()];
+        // const test: [u64; 8] = [u64::MAX; 8];
         for i in 0..batch_len {
             let batch: Vec<*const u8> = batches.iter().enumerate()
             .map(|(n, v)| unsafe { 
@@ -99,6 +100,7 @@ impl ShortCircuit {
                                 *bitmap.get_unchecked_mut((*off >> 6) as usize) |= 1 << (*off % (1 << 6));
                         }
                         bitmap.as_ptr() as *const u8
+                        // test.as_ptr() as *const u8
                     }
                     _ => unreachable!()
                 }

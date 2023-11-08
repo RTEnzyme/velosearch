@@ -1,13 +1,13 @@
 //! PrimitivesCombination optimizer that combining the bitwise primitves
 //! and short-circuit primitive according the cost per operation (cpo).
 
-use std::{sync::Arc, collections::HashSet};
+use std::sync::Arc;
 
 use dashmap::DashSet;
-use datafusion::{physical_optimizer::PhysicalOptimizerRule, physical_plan::{ExecutionPlan, boolean::BooleanExec, rewrite::TreeNodeRewritable}};
+use datafusion::{physical_optimizer::PhysicalOptimizerRule, physical_plan::{ExecutionPlan, rewrite::TreeNodeRewritable}};
 use tracing::debug;
 
-use crate::{physical_expr::{BooleanEvalExpr, boolean_eval::{PhysicalPredicate, SubPredicate}, Primitives}, JIT_MAX_NODES, ShortCircuit, datasources::posting_table::PostingExec};
+use crate::{physical_expr::{boolean_eval::{PhysicalPredicate, SubPredicate}, Primitives}, JIT_MAX_NODES, ShortCircuit, datasources::posting_table::PostingExec};
 
 /// PrimitivesCombination optimizer that optimizes the combination of 
 /// bitwise primitives and short-circuit primitive.
@@ -129,9 +129,15 @@ fn optimize_predicate_inner(predicate: &mut PhysicalPredicate) -> DashSet<usize>
                 optimize_predicate_inner(&mut arg.sub_predicate);
             }
         }
-        PhysicalPredicate::Leaf { .. } => {
+        PhysicalPredicate::Leaf { primitive } => {
             // The first level is only one node.
-            debug!("Skip optimize predicate because the first level is only one node.");
+            match primitive {
+                Primitives::BitwisePrimitive(_) => todo!(),
+                Primitives::ShortCircuitPrimitive(_) => todo!(),
+                Primitives::ColumnPrimitive(c) => {
+                    valid_batch_idx.insert(c.index());
+                }
+            }
         }
     }
     valid_batch_idx
