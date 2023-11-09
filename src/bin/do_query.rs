@@ -1,9 +1,47 @@
 use std::{env, sync::Arc};
-
-use datafusion::{sql::TableReference, datasource::provider_as_source, common::cast::as_uint64_array};
-use fastfull_search::{utils::{Result, builder::deserialize_posting_table}, BooleanContext, jit::AOT_PRIMITIVES, query::boolean_query::BooleanPredicateBuilder};
+use peg;
+use datafusion::{prelude::*, sql::TableReference, datasource::provider_as_source,arrow::array::UInt64Array, prelude::Expr};
+use fastfull_search::{utils::{Result, builder::deserialize_posting_table}, BooleanContext, jit::AOT_PRIMITIVES};
 use jemallocator::Jemalloc;
-use tantivy::tokenizer::{TextAnalyzer, SimpleTokenizer, RemoveLongFilter, LowerCaser, Stemmer};
+use tantivy::tokenizer::{TextAnalyzer, SimpleTokenizer, RemoveLongFilter, LowerCaser};
+use lazy_static::lazy_static;
+
+lazy_static!{
+    pub static ref TOKENIZER: TextAnalyzer = TextAnalyzer::from(SimpleTokenizer)
+    .filter(RemoveLongFilter::limit(40))
+    .filter(LowerCaser);
+}
+
+fn col_tokenized(token: &str) -> Expr {
+    let mut process = TOKENIZER.token_stream(&token);
+    let token = &process.next().unwrap().text;
+    Expr::Column(token.into())
+}
+
+peg::parser!{
+    grammar boolean_parser() for str {
+        pub rule boolean() -> Expr = precedence!{
+            x:and() _ y:(@) { boolean_and(x, y) }
+            x:or() _ y:(@) { boolean_or(x, y)}
+            x:and() { x }
+            x:or() { x }
+            --
+            "(" e:boolean() ")" { e }
+            "+(" e:boolean() ")" { e }
+        }
+        
+        rule or() -> Expr
+            = l:term() { l }
+
+        rule and() -> Expr
+            = "+" e:term() {e}
+
+        rule term() -> Expr 
+            = e:$(['a'..='z' | 'A'..='Z' | '_']['a'..='z' | 'A'..='Z' | '0'..='9' | '_']*) { col_tokenized(e) }
+
+        rule _() =  quiet!{[' ' | '\t']*}
+    }
+}
 
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
@@ -22,32 +60,39 @@ async fn main_inner(index_dir: String) -> Result<()> {
     let provider = ctx.index_provider("__table__").await?;
     let schema = &provider.schema();
     let table_source = provider_as_source(Arc::clone(&provider));
-    let tokenizer = TextAnalyzer::from(SimpleTokenizer)
-            .filter(RemoveLongFilter::limit(40))
-            .filter(LowerCaser);
 
     let stdin = std::io::stdin();
     for line_res in stdin.lines() {
         let line = line_res?;
-        let query = line.split("\t").skip(1).collect::<String>();
-        let is_cnf = query.starts_with("+");
-        let fields = query.split(" ");
-        let predicate = if is_cnf {
-            let trim_fields: Vec<String> = fields
-                .map(|s| tokenizer.token_stream(&s.chars().skip(1).collect::<String>()).next().unwrap().text.clone())
-                .collect();
-            BooleanPredicateBuilder::must(&trim_fields.iter().map(|v| v.as_str()).collect::<Vec<&str>>())?
-        } else {
-            let trim_fields: Vec<String> = fields
-                .map(|s| tokenizer.token_stream(s).next().unwrap().text.clone())
-                .collect();
-            BooleanPredicateBuilder::should(&trim_fields.iter().map(|v| v.as_str()).collect::<Vec<&str>>())?
-        };
-        let predicate = predicate.build();
+        let predicate = boolean_parser::boolean(&line).unwrap();
         let index = ctx.boolean_with_provider(table_source.clone(), &schema, predicate, false).await.unwrap();
         let res = index.collect().await.unwrap();
-        println!("1");
+        let res: u64 = res[0].column(0).as_any().downcast_ref::<UInt64Array>().unwrap().value(0);
+        println!("{:}", res);
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::boolean_parser;
+
+    #[test]
+    fn simple_and_test() {
+        let expr = boolean_parser::boolean("+ast +ast").unwrap();
+        assert_eq!(format!("{:?}", expr), "ast & ast");
+    }
+
+    #[test]
+    fn somple_or_test() {
+        let expr = boolean_parser::boolean("ast ast").unwrap();
+        assert_eq!(format!("{:?}", expr), "ast | ast");
+    }
+
+    #[test]
+    fn combination_test() {
+        let expr = boolean_parser::boolean("+ast +ast +(ast ast (+ast +ast))").unwrap();
+        assert_eq!(format!("{:?}", expr), "ast & ast & (ast | ast | ast & ast)");
+    }
 }
