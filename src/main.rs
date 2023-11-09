@@ -2,16 +2,10 @@ use clap::Parser;
 use fastfull_search::index::{BaseHandler, SplitHandler, SplitO1, BooleanQueryHandler, PostingHandler, TantivyHandler};
 use fastfull_search::{Result, FastArgs, Handler};
 use fastfull_search::index::handler::HandlerT;
-use jemallocator::Jemalloc;
-use mimalloc::MiMalloc;
 use tracing::{info, Level};
 
-// #[global_allocator]
-// static GLOBAL: Jemalloc = Jemalloc;
-// static GLOBAL: MiMalloc = MiMalloc;
-
 fn main() -> Result<()> {
-    tracing_subscriber::fmt().with_max_level(Level::INFO).init();
+    tracing_subscriber::fmt().with_max_level(Level::DEBUG).init();
     info!("main execution");
     let args = FastArgs::parse();
 

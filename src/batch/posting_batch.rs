@@ -225,7 +225,6 @@ impl PostingBatch {
             let valid_mask = unsafe { _pext_u64(distri, min_range) };
             let idx = unsafe { index.unwrap_unchecked() as usize };
             let bucket = if idx != usize::MAX {
-                unsafe {
                 self.postings.get(idx).cloned().ok_or_else(|| {
                     FastErr::InternalErr(format!(
                         "project index {} out of bounds, max fields {}",
@@ -233,7 +232,6 @@ impl PostingBatch {
                         self.postings.len(),
                     ))
                 })?
-                }
             } else {
                 continue;
             };
@@ -285,7 +283,7 @@ impl PostingBatch {
         
         debug!("start eval");
         let eval = predicate_ref.eval_avx512(&batches, None, true)?;
-        debug!("end eval");
+        debug!("end eval: {:}", eval.is_some());
         // batches.clear();
         if let Some(e) = eval {
             let mut accumulator = unsafe { _mm512_setzero_si512() };
@@ -303,8 +301,7 @@ impl PostingBatch {
                     TempChunk::N0NE => {},
                 }
             });
-            // let sum = unsafe { _mm512_reduce_add_epi64(accumulator) } as usize + id_acc;
-            let sum = id_acc;
+            let sum = unsafe { _mm512_reduce_add_epi64(accumulator) } as usize + id_acc;
             debug!("sum: {:}", sum);
             // let sum = 0;
             Ok(sum)

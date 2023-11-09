@@ -132,7 +132,7 @@ impl HandlerT for PostingHandler {
                         self.tokenizer.token_stream(w).next().unwrap().text.clone()
                     })
                     .collect();
-                let predicate = BooleanPredicateBuilder::must(&predicate.iter().map(|w| w.as_str()).collect::<Vec<_>>()).unwrap();
+                let predicate = BooleanPredicateBuilder::should(&predicate.iter().map(|w| w.as_str()).collect::<Vec<_>>()).unwrap();
                 // let predicate = BooleanPredicateBuilder::should(&["and", "the"]).unwrap();
                 // let predicate = predicate.with_must(predicate1).unwrap();
                 let predicate = predicate.build();
@@ -144,7 +144,7 @@ impl HandlerT for PostingHandler {
                     // .count_agg().unwrap()
                     .collect().await.unwrap();
                 let time = timer.elapsed().as_micros();
-                info!("res: {:?}", res);
+                info!("res: {:?}", res[0]);
                 time_distri.push(time);
                 time_sum += time;
             }

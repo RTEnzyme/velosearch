@@ -256,7 +256,24 @@ impl PhysicalPredicate {
                                         }
                                     }
                                 }
-                                (_, _) => { },
+                                (Some(eval), None) => {
+                                    let mut init: Vec<TempChunk> = Vec::with_capacity(eval.len());
+                                    for e in eval {
+                                        match e {
+                                            Chunk::Bitmap(b) => {
+                                                init.push(TempChunk::Bitmap(load_u64_slice(b)));
+                                            }
+                                            Chunk::IDs(ids) => {
+                                                init.push(TempChunk::IDs(ids.to_vec()));
+                                            }
+                                            Chunk::N0NE => {
+                                                init.push(TempChunk::N0NE);
+                                            }
+                                        }
+                                    }
+                                    init_v = Some(init);
+                                }
+                                (_, _) => {}
                             }
                         }
                         Ok(init_v)
