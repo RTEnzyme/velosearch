@@ -31,6 +31,6 @@ pub fn avx512_bitwise_or(lhs: &mut [u64], rhs: &[u64]) {
         }
     }
     for i in (lanes_num as usize * 8)..lhs.len() {
-        lhs[i] = unsafe { lhs.get_unchecked(i) & rhs.get_unchecked(i)};
+        lhs[i] = unsafe { lhs.get_unchecked(i) | rhs.get_unchecked(i)};
     }
 }

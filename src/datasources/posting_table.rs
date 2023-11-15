@@ -46,14 +46,14 @@ impl PostingTable {
             .collect()
     }
 
-    pub fn space_usage(&self) -> usize {
-        let mut space: usize = 0;
-        space += size_of_val(self.term_idx.as_ref());
-        space += self.postings
-            .iter()
-            .map(|v| v.space_usage())
-            .sum::<usize>();
-        space
+    pub fn memory_consumption(&self) -> usize {
+        let postings: usize = self.postings.iter()
+            .map(|v| {
+                v.memory_consumption()
+            })
+            .sum();
+        info!("posting size: {:}", postings);
+        postings
     }
 
     // pub fn serialize(&self, path: &Path) -> Result<()> {

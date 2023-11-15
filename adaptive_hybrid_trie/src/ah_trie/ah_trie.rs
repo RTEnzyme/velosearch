@@ -131,6 +131,10 @@ impl<T: Clone+Send+Sync+'static> AHTrie<T> {
         }
         debug!("end tracing");
     }
+
+    pub fn len(&self) -> usize {
+        self.inner.read().unwrap().values.len()
+    }
 }
 
 async fn convert_encoding<T: Clone+Send+Sync>(ah_trie_root: Arc<RwLock<AHTrieInner<T>>>, key: &str, encoding: Encoding) {

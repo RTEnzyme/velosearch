@@ -155,6 +155,7 @@ impl<T> AHTrieInner<T> {
         let prefix_up_bound = ByteString::new(prefix_up_bound.as_bytes());
         self.root.range(prefix_low_bound..prefix_up_bound).collect()
     }
+
 }
 
 fn prefix(key: &str) -> [u8; CUT_OFF] {

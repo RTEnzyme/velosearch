@@ -1,8 +1,8 @@
-use std::{sync::Arc, ops::Index, collections::BTreeMap, mem::size_of_val, ptr::NonNull, cell::RefCell, arch::x86_64::{_pext_u64, _blsr_u64, _mm512_loadu_epi64, _mm512_popcnt_epi64, _mm512_reduce_add_epi64, _mm512_setzero_si512, _mm512_add_epi64, _mm512_loadu_epi8, _mm512_mask_compressstoreu_epi8}, slice::from_raw_parts};
+use std::{sync::Arc, ops::Index, collections::BTreeMap, mem::size_of_val, ptr::NonNull, cell::RefCell, arch::x86_64::{_pext_u64, _blsr_u64, _mm512_popcnt_epi64, _mm512_reduce_add_epi64, _mm512_setzero_si512, _mm512_add_epi64}, slice::from_raw_parts};
 
 use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type, ToByteSlice}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray, GenericBinaryArray, GenericBinaryBuilder, UInt64Array}, record_batch::{RecordBatch, RecordBatchOptions}, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
 use serde::{Serialize, Deserialize};
-use tracing::{debug, info};
+use tracing::debug;
 use crate::{utils::{Result, FastErr, vec::{store_advance_aligned, set_vec_len_by_ptr}}, physical_expr::{BooleanEvalExpr, boolean_eval::{Chunk, TempChunk}}};
 
 
@@ -36,20 +36,9 @@ impl BatchRange {
     }
 }
 
-pub type PostingList = GenericBinaryArray<i32>;
+pub type PostingList = GenericBinaryArray<i16>;
 pub type TermSchemaRef = SchemaRef;
 pub type BatchFreqs = Vec<Arc<GenericListArray<i32>>>;
-
-const COMPRESS_INDEX: [u8; 64] =  [
-        0, 1, 2, 3, 4, 5, 6, 7,
-        8, 9, 10, 11, 12, 13, 14, 15,
-        16, 17, 18, 19, 20, 21, 22, 23,
-        24, 25, 26, 27, 28, 29, 30, 31,
-        32, 33, 34, 35, 36, 37, 38, 39,
-        40, 41, 42, 43, 44, 45, 46, 47,
-        48, 49, 50, 51, 52, 53, 54, 55,
-        56, 57, 58, 59, 60, 61, 62, 63,
-    ];
 
 
 /// A batch of Postinglist which contain serveral terms,
@@ -64,6 +53,16 @@ pub struct PostingBatch {
 }
 
 impl PostingBatch {
+    pub fn memory_consumption(&self) -> usize {
+        let postings: usize = self.postings.iter()
+            .map(|v| {
+                v.get_array_memory_size()
+            })
+            .sum();
+        let boundary = size_of_val(&self.boundary);
+        postings + boundary
+    }
+
     pub fn try_new(
         schema: TermSchemaRef,
         postings: Vec<Arc<PostingList>>,
@@ -120,7 +119,6 @@ impl PostingBatch {
         min_range: u64,
     ) -> Result<RecordBatch> {
         debug!("project_fold");
-        const CHUNK_SIZE: usize = 8;
         let valid_batch_num = min_range.count_ones() as usize;
         let mut batches: Vec<ArrayRef> = Vec::with_capacity(indices.len());
         for (idx, distri) in indices.into_iter().zip(distris.into_iter()) {
@@ -282,7 +280,7 @@ impl PostingBatch {
         }
         
         debug!("start eval");
-        let eval = predicate_ref.eval_avx512(&batches, None, true)?;
+        let eval = predicate_ref.eval_avx512(&batches, None, true, valid_num)?;
         debug!("end eval: {:}", eval.is_some());
         // batches.clear();
         if let Some(e) = eval {
@@ -369,9 +367,9 @@ impl PostingBatch {
         &self,
         indices: &[Option<usize>],
         projected_schema: SchemaRef,
-        distris: &[Option<u64>],
-        boundary_idx: usize,
-        min_range: u64,
+        _distris: &[Option<u64>],
+        _boundary_idx: usize,
+        _min_range: u64,
     ) -> Result<RecordBatch> {
         debug!("project_fold_with_freqs");
         // Add freqs fields
@@ -519,7 +517,7 @@ impl PostingBatchBuilder {
         let term_dict = self.term_dict
             .into_inner();
         let mut schema_list = Vec::new();
-        let mut postings: Vec<Arc<GenericBinaryArray<i32>>> = Vec::new();
+        let mut postings: Vec<Arc<PostingList>> = Vec::new();
         let mut freqs = Vec::new();
         let mut boundarys = Vec::new();
         
@@ -601,7 +599,7 @@ impl PostingBatchBuilder {
                 boundarys.push(boundary);
         }
         schema_list.push(Field::new("__id__", DataType::UInt32, false));
-        postings.push(Arc::new(GenericBinaryArray::<i32>::from(vec![] as Vec<&[u8]>)));
+        postings.push(Arc::new(PostingList::from(vec![] as Vec<&[u8]>)));
         PostingBatch::try_new_with_freqs(
             Arc::new(Schema::new(schema_list)),
             postings,
@@ -693,21 +691,6 @@ fn build_boolean_array(mut data: Vec<u64>, batch_len: usize) -> ArrayRef {
     Arc::new(BooleanArray::from(array_data))
 }
 
-fn build_boolean_array_u8(mut data: Vec<u8>, batch_len: usize) -> ArrayRef {
-    let value_buffer = unsafe {
-        let buf = Buffer::from_raw_parts(NonNull::new_unchecked(data.as_mut_ptr() as *mut u8), batch_len / 8, batch_len / 8);
-        std::mem::forget(data);
-        buf
-    };
-    let builder = ArrayData::builder(DataType::Boolean)
-        .len(batch_len)
-        .add_buffer(value_buffer);
-
-    let array_data = builder.build().unwrap();
-    Arc::new(BooleanArray::from(array_data))
-}
-
-
 #[cfg(test)]
 mod test {
     // use std::sync::Arc;
@@ -716,28 +699,12 @@ mod test {
 
     // use super::{BatchRange, PostingBatch};
 
-    use std::{ptr::{self, from_raw_parts}, arch::x86_64::{_mm512_mask_compressstoreu_epi16, __mmask32, _mm512_loadu_epi16, __mmask64, _mm512_loadu_epi8, _mm512_mask_compressstoreu_epi8}};
-
-    use crate::batch::posting_batch::COMPRESS_INDEX;
 
     #[test]
     fn test_ptr() {
         // let val: [u64; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
         // println!("{:?}", ptr::metadata(val.as_slic8e() as *const [u64]));
         println!("{:}", std::mem::size_of::<Option<&[u8]>>())
-    }
-
-    #[test]
-    fn test_compress() {
-        let data = unsafe {
-            _mm512_loadu_epi8(COMPRESS_INDEX.as_ptr() as *const i8)
-        };
-        println!("{:?}", data);
-        let mut res: Vec<u8> = vec![0; 64];
-        unsafe {
-            _mm512_mask_compressstoreu_epi8(res.as_mut_ptr() as *mut u8, u64::MAX as __mmask64, data);
-        }
-        println!("{:?}", res);
     }
 
     // fn build_batch() -> PostingBatch {

@@ -1,5 +1,5 @@
 
-use std::sync::Arc;
+use std::{sync::Arc, collections::{HashSet, BTreeSet}};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -129,11 +129,14 @@ impl BooleanContext {
         is_score: bool,
     ) -> Result<BooleanQuery> {
         debug!("start boolean builder");
-        let project_exprs = [binary_expr_columns(&predicate), vec![Column::from_name("__id__")]].concat();
-        let project = project_exprs
+        let project_exprs = binary_expr_columns(&predicate);
+        let mut project: Vec<usize> = project_exprs
             .iter()
             .map(|e| schema.index_of(&e.name).unwrap_or(usize::MAX))
+            .collect::<BTreeSet<usize>>()
+            .into_iter()
             .collect();
+        project.push(schema.index_of("__id__").unwrap());
         debug!("end project");
         if let Expr::BooleanQuery(expr) = predicate {
             let plan = LogicalPlanBuilder::scan(
@@ -219,7 +222,7 @@ fn physical_optimizer_rulse() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync
     vec![
         // Arc::new(Repartition::new()),
         Arc::new(MinOperationRange::new()),
-        // Arc::new(PrimitivesCombination::new()),
+        Arc::new(PrimitivesCombination::new()),
         // Arc::new(PartitionPredicateReorder::new()),
         // Arc::new(IntersectionSelection::new()),
         // Arc::new(EnforceDistribution::new()),

@@ -9,7 +9,7 @@ use tantivy::tokenizer::{TextAnalyzer, SimpleTokenizer, RemoveLongFilter, LowerC
 use tokio::time::Instant;
 use tracing::{info, span, Level, debug};
 
-use crate::{utils::{json::{parse_wiki_dir, WikiItem}, builder::{deserialize_posting_table, serialize_term_meta}}, Result, batch::{PostingBatchBuilder, BatchRange, TermMetaBuilder, PostingBatch}, datasources::posting_table::PostingTable, BooleanContext, query::boolean_query::BooleanPredicateBuilder, jit::AOT_PRIMITIVES};
+use crate::{utils::{json::{parse_wiki_dir, WikiItem}, builder::{deserialize_posting_table, serialize_term_meta}}, Result, batch::{PostingBatchBuilder, BatchRange, TermMetaBuilder, PostingBatch}, datasources::posting_table::PostingTable, BooleanContext, jit::AOT_PRIMITIVES, boolean_parser, parser};
 
 use super::HandlerT;
 
@@ -22,6 +22,7 @@ pub struct PostingHandler {
 
 impl PostingHandler {
     pub fn new(base: String, path: Vec<String>, partition_nums: usize, batch_size: u32, dump_path: Option<String>) -> Self {
+        let _ = AOT_PRIMITIVES.len();
         let tokenizer = TextAnalyzer::from(SimpleTokenizer)
         .filter(RemoveLongFilter::limit(40))
         .filter(LowerCaser);
@@ -89,11 +90,10 @@ impl HandlerT for PostingHandler {
         rayon::ThreadPoolBuilder::new().num_threads(22).build_global().unwrap();
         let partition_nums = self.partition_nums;
         let ctx = BooleanContext::new();
-        let space = self.posting_table.as_ref().unwrap().space_usage();
+        let space = self.posting_table.as_ref().unwrap().memory_consumption();
         ctx.register_index(TableReference::Bare { table: "__table__".into() }, Arc::new(self.posting_table.take().unwrap()))?;
         let table = ctx.index("__table__").await?;
         let mut test_iter = self.test_case.clone().into_iter();
-        let _ = AOT_PRIMITIVES.len();
         // let mut handlers = Vec::with_capacity(20);
         debug!("======================start!===========================");
         let mut cnt = 0;
@@ -125,17 +125,23 @@ impl HandlerT for PostingHandler {
                 // let predicate = BooleanPredicateBuilder::must(&["hot", "spring", "south", "dakota"]).unwrap();
                 // let predicate = BooleanPredicateBuilder::must(&["civil", "war", "battlefield"]).unwrap();
                 let timer = Instant::now();
-                let predicates = ["centerville", "high", "school"];
+                let predicates = ["freelance", "work"];
                 let predicate: Vec<String> = predicates
                     .into_iter()
                     .map(|w| {
                         self.tokenizer.token_stream(w).next().unwrap().text.clone()
                     })
                     .collect();
-                let predicate = BooleanPredicateBuilder::should(&predicate.iter().map(|w| w.as_str()).collect::<Vec<_>>()).unwrap();
+                // let predicate = BooleanPredicateBuilder::must(&predicate.iter().map(|w| w.as_str()).collect::<Vec<_>>()).unwrap();
                 // let predicate = BooleanPredicateBuilder::should(&["and", "the"]).unwrap();
                 // let predicate = predicate.with_must(predicate1).unwrap();
-                let predicate = predicate.build();
+                // let predicate = predicate.build();
+                let query = "lord of the ring";
+                let predicate = if let Ok(expr) = parser::boolean(query) {
+                    expr
+                } else {
+                    boolean_parser::boolean(query).unwrap()
+                };
                 info!("Predicate{:}: {:?}", i, predicate);
                 let index = ctx.boolean_with_provider(table_source.clone(), &schema, predicate, false).await.unwrap();
                 let res = index
@@ -233,6 +239,7 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
             keys.push(m.0); 
             values.push(m.1.build());
         });
+    
     let (fields_index, fields) = keys.iter()
         .chain([&"__id__".to_string()].into_iter())
         .enumerate()

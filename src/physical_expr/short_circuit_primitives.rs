@@ -1,4 +1,4 @@
-use std::{any::Any, ptr::NonNull, sync::Arc, arch::x86_64::_mm512_loadu_epi64};
+use std::{any::Any, ptr::NonNull, sync::Arc, arch::x86_64::{_mm512_loadu_epi64, __m512i}};
 
 use datafusion::{physical_plan::{PhysicalExpr, ColumnarValue}, arrow::{datatypes::DataType, record_batch::RecordBatch, array::{BooleanArray, ArrayData}, buffer::Buffer}, error::DataFusionError};
 use tracing::debug;
@@ -73,36 +73,32 @@ impl ShortCircuit {
         res
     }
 
-    pub fn eval_avx512(&self, init_v: Option<Vec<TempChunk>>, batch: &Vec<Option<Vec<Chunk>>>) -> Vec<TempChunk> {
+    pub fn eval_avx512(&self, init_v: Option<Vec<TempChunk>>, batches: &Vec<Option<Vec<Chunk>>>, batch_len: usize) -> Vec<TempChunk> {
+        const ZEROS: [u64; 8] = [0; 8];
         debug!("Eval by short_circuit_primitives");
-        let batch_len = batch[self.batch_idx[0]].as_ref().unwrap().len();
         let mut res: Vec<u64> = vec![0; batch_len * 8];
         
-        let batches: Vec<&Vec<Chunk>> = self.batch_idx
-                .iter()
-                .map(|v| {
-                    unsafe { 
-                        batch[*v].as_ref().unwrap_unchecked()
-                    }
-                })
-                .collect();
-        let mut leak_list: Vec<[u64; 8]> = vec![[0; 8]; batch.len()];
+        let mut leak_list: Vec<[u64; 8]> = vec![[0; 8]; batches.len()];
         // const test: [u64; 8] = [u64::MAX; 8];
         for i in 0..batch_len {
             let batch: Vec<*const u8> = batches.iter().enumerate()
             .map(|(n, v)| unsafe { 
-                match v.get_unchecked(i) {
-                    Chunk::Bitmap(b) => (*b).as_ptr() as *const u8,
-                    Chunk::IDs(ids) => {
-                        leak_list[n].fill(0);
-                        let bitmap = leak_list.get_unchecked_mut(n);
-                        for off in *ids {
-                                *bitmap.get_unchecked_mut((*off >> 6) as usize) |= 1 << (*off % (1 << 6));
+                if let Some(c) = v {
+                    match c.get_unchecked(i) {
+                        Chunk::Bitmap(b) => (*b).as_ptr() as *const u8,
+                        Chunk::IDs(ids) => {
+                            leak_list[n].fill(0);
+                            let bitmap = leak_list.get_unchecked_mut(n);
+                            for off in *ids {
+                                    *bitmap.get_unchecked_mut((*off >> 6) as usize) |= 1 << (*off % (1 << 6));
+                            }
+                            bitmap.as_ptr() as *const u8
+                            // test.as_ptr() as *const u8
                         }
-                        bitmap.as_ptr() as *const u8
-                        // test.as_ptr() as *const u8
+                        _ => unreachable!()
                     }
-                    _ => unreachable!()
+                } else {
+                    ZEROS.as_ptr() as *const u8
                 }
             })
             .collect();

@@ -72,7 +72,7 @@ fn short_circuit(c: &mut Criterion) {
             let predicate = predicate.predicate.as_ref().unwrap().get();
             let predicate_ref = unsafe {predicate.as_ref().unwrap() };
             b.iter(|| {
-                predicate_ref.eval_avx512(&batch, None, true).unwrap();
+                predicate_ref.eval_avx512(&batch, None, true, 1).unwrap();
             })
         });
     }

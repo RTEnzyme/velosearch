@@ -102,6 +102,7 @@ pub fn deserialize_posting_table(dump_path: String) -> Option<PostingTable> {
         ))
         .collect();
 
+    let mut memory_consume = 0;
     let values = values
         .into_iter()
         .map(|v| {
@@ -111,15 +112,17 @@ pub fn deserialize_posting_table(dump_path: String) -> Option<PostingTable> {
                     Arc::new(UInt64Array::from(v))
                 })
                 .collect();
-            TermMeta {
+            let termmeta = TermMeta {
                 distribution: Arc::new(distris),
                 index: v.index,
                 nums: v.nums,
                 selectivity: v.selectivity,
-            }
+            };
+            memory_consume += termmeta.memory_consumption();
+            termmeta
         })
         .collect();
-
+    info!("term index: {:}", memory_consume);
     let term_idx = Arc::new(TermIdx::new(keys, values, 20));
 
     Some(PostingTable::new(

@@ -107,18 +107,18 @@ pub enum PhysicalPredicate {
 }
 
 impl PhysicalPredicate {
-    pub fn eval_avx512(&self, batch: &Vec<Option<Vec<Chunk>>>, init_v: Option<Vec<TempChunk>>, is_and: bool) -> Result<Option<Vec<TempChunk>>> {
+    pub fn eval_avx512(&self, batch: &Vec<Option<Vec<Chunk>>>, init_v: Option<Vec<TempChunk>>, is_and: bool, valid_num: usize) -> Result<Option<Vec<TempChunk>>> {
         let mut init_v = init_v;
         match self {
             PhysicalPredicate::And { args } => {
                 for predicate in args {
-                    init_v = predicate.sub_predicate.eval_avx512(&batch, init_v, true)?;
+                    init_v = predicate.sub_predicate.eval_avx512(&batch, init_v, true, valid_num)?;
                 }
                 Ok(init_v)
             }
             PhysicalPredicate::Or { args } => {
                 for predicate in args {
-                    init_v = predicate.sub_predicate.eval_avx512(&batch, init_v, false)?;
+                    init_v = predicate.sub_predicate.eval_avx512(&batch, init_v, false, valid_num)?;
                 }
                 Ok(init_v)
             }
@@ -129,9 +129,9 @@ impl PhysicalPredicate {
                     }
                     Primitives::ShortCircuitPrimitive(s) => {
                         if is_and {
-                            Ok(Some(s.eval_avx512(init_v, &batch)))
+                            Ok(Some(s.eval_avx512(init_v, &batch, valid_num)))
                         } else {
-                            let eval = s.eval_avx512(None, &batch);
+                            let eval = s.eval_avx512(None, &batch, valid_num);
                             match init_v {
                                 Some(mut e) => {
                                     e.iter_mut()

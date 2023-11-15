@@ -15,7 +15,7 @@ use datafusion::{
         physical_optimizer::PhysicalOptimizerRule
     };
 use futures::{future::BoxFuture, FutureExt};
-use tracing::{debug, trace};
+use tracing::{debug, trace, info};
 
 use crate::{physical_expr::{boolean_eval::{PhysicalPredicate, Primitives, SubPredicate}, BooleanEvalExpr}, datasources::posting_table::PostingExec};
 
@@ -142,7 +142,7 @@ impl BooleanPhysicalPlanner {
                             .map(|(i, s)| {
                                 let term_meta = posting.term_meta_of(s);
                                 if let Some(term_meta) = term_meta {
-                                    debug!("{s} term_meta nums: {:?}", term_meta.nums[0]);
+                                    info!("{s} term_meta nums: {:?}", term_meta.nums[0]);
                                     // debug!("{s} term_meta true count: {:?}", term_meta.distribution[0].true_count());
                                     let sel = term_meta.selectivity;
                                     ((s, i), (Some(term_meta), (s, sel)))
@@ -366,7 +366,7 @@ fn create_physical_expr(
             if &c.name == "mask" {
                 Ok(Arc::new(Column::new(&c.name, 0)))
             } else {
-                let idx = input_schema.index_of(&c.name)?;
+                let idx = input_dfschema.index_of_column_by_name(None, &c.name)?;
                 Ok(Arc::new(Column::new(&c.name, idx)))
             }
         }

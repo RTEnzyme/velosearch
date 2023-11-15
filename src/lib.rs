@@ -18,17 +18,81 @@ pub mod query;
 pub mod context;
 pub mod batch;
 pub mod physical_expr;
+use datafusion::prelude::*;
 use jemallocator::Jemalloc;
 pub use utils::Result;
 pub use context::BooleanContext;
 pub use optimizer::{BooleanPhysicalPlanner, MinOperationRange, PartitionPredicateReorder, RewriteBooleanPredicate, PrimitivesCombination};
 pub use physical_expr::ShortCircuit;
 use clap::{Parser, ValueEnum};
+use tantivy::tokenizer::{TextAnalyzer, SimpleTokenizer, RemoveLongFilter, LowerCaser};
+use lazy_static::lazy_static;
+use peg;
 
 // #[global_allocator]
 // static GLOBAL: Jemalloc = Jemalloc;
+lazy_static!{
+    pub static ref TOKENIZER: TextAnalyzer = TextAnalyzer::from(SimpleTokenizer)
+    .filter(RemoveLongFilter::limit(60))
+    .filter(LowerCaser);
+}
 
-const JIT_MAX_NODES: usize = 6;
+fn col_tokenized(token: &str) -> Expr {
+    let mut process = TOKENIZER.token_stream(&token);
+    let mut exprs = Vec::new();
+    process.process(&mut |token| {
+        exprs.push(Expr::Column(token.text.clone().into()));
+    });
+    exprs.into_iter()
+    .reduce(|l, r| {
+        boolean_and(l, r)
+    })
+    .expect(&format!("token: {:}", token))
+}
+
+peg::parser!{
+    pub grammar parser() for str {
+        pub rule boolean() -> Expr = precedence!{
+            x:(@) _ "AND" _ y:@ { boolean_and(x, y)}
+            x:(@) _ "OR" _ y:@ { boolean_or(x, y) }
+            --
+            n:term() { n }
+            "(" e:boolean()")" { e }
+        }
+
+        rule term() -> Expr 
+            = e:$(['a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '\'' | '.' | '-']+) { col_tokenized(e) }
+
+        rule _() =  quiet!{[' ' | '\t']*}
+    }
+}
+
+peg::parser!{
+    pub grammar boolean_parser() for str {
+        pub rule boolean() -> Expr = precedence!{
+            x:and() _ y:(@) { boolean_and(x, y) }
+            x:or() _ y:(@) { boolean_or(x, y)}
+            x:and() { x }
+            x:or() { x }
+            --
+            "(" e:boolean() ")" { e }
+            "+(" e:boolean() ")" { e }
+        }
+        
+        rule or() -> Expr
+            = l:term() { l }
+
+        rule and() -> Expr
+            = "+" e:term() {e}
+
+        rule term() -> Expr 
+            = e:$(['a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '.' ]*) { col_tokenized(e) }
+
+        rule _() =  quiet!{[' ' | '\t']*}
+    }
+}
+
+const JIT_MAX_NODES: usize = 5;
 
 #[derive(Parser, Debug)]
 pub struct FastArgs {

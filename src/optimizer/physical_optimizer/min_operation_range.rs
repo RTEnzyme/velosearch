@@ -103,11 +103,11 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                                 res as Arc<dyn Array>
                             })
                             .collect();
+                        debug!("distri: {:?}", distris);
                         let batch = RecordBatch::try_new(
                             projected_schema.clone(),
                             distris,
                         ).unwrap();
-                        debug!("self.predicate: {:?}", self.predicate);
                         match self.predicate.as_ref() {
                             Some(p) => Arc::new(
                                 p
@@ -125,6 +125,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                     }
                 })
                 .collect();
+            debug!("partition range: {:?}", partition_range);
             debug!("Collect term statistics");
             // debug!("partition 0 min_range len: {:?}", partition_range[0].true_count());
             self.min_range = Some(partition_range);
