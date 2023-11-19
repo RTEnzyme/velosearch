@@ -49,7 +49,8 @@ struct GetMinRange {
     partition_schema: Option<Arc<Schema>>,
     predicate: Option<Arc<dyn PhysicalExpr>>,
     is_score: bool,
-    min_range: Option<Vec<Arc<UInt64Array>>>,
+    min_range: Option<Arc<UInt64Array>>,
+    indexes: Option<Vec<usize>>,
 }
 
 impl GetMinRange {
@@ -60,6 +61,7 @@ impl GetMinRange {
             predicate: None,
             is_score: false,
             min_range: None,
+            indexes: None,
         }
     }
 }
@@ -82,10 +84,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
             let term_stats: Vec<Option<TermMeta>> = posting.term_metas_of(&project_terms);
             let partition_num = posting.output_partitioning().partition_count();
             debug!("collect partition range");
-            let partition_range: Vec<Arc<UInt64Array>> = (0..partition_num)
-                // .into_par_iter()
-                .into_iter()
-                .map(|p| {
+            let (partition_range, indexes): (Vec<u64>, Vec<usize>) = {
                     let mut length = None;
                     for v in &term_stats {
                         if let Some(t) = v {
@@ -97,7 +96,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                         let distris = term_stats.iter()
                             .map(|t| {
                                 let res = match t {
-                                    Some(t) => t.distribution[p].clone(),
+                                    Some(t) => t.distribution[0].clone(),
                                     None => empty_array.clone(),
                                 };
                                 res as Arc<dyn Array>
@@ -109,26 +108,31 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
                             distris,
                         ).unwrap();
                         match self.predicate.as_ref() {
-                            Some(p) => Arc::new(
-                                p
+                            Some(p) => p
                                 .evaluate(&batch)
                                 .unwrap()
                                 .into_array(0)
                                 .as_any()
                                 .downcast_ref::<UInt64Array>().unwrap()
-                                .to_owned()
-                            ),
-                            None => empty_array,
+                                .values()
+                                .into_iter()
+                                .enumerate()
+                                .filter(|(_, &v)| v != 0)
+                                .map(|(i, v)| {
+                                    (*v, i)
+                                })
+                                .unzip(),
+                            None => (vec![], vec![]),
                         }
                     } else {
-                        Arc::new(UInt64Array::from(vec![] as Vec<u64>))
+                        (vec![], vec![])
                     }
-                })
-                .collect();
+            };
             debug!("partition range: {:?}", partition_range);
             debug!("Collect term statistics");
             // debug!("partition 0 min_range len: {:?}", partition_range[0].true_count());
-            self.min_range = Some(partition_range);
+            self.min_range = Some(Arc::new(UInt64Array::from(partition_range)));
+            self.indexes = Some(indexes);
             self.partition_stats = Some(term_stats);
             debug!("End Pre_visit PostingExec");
             Ok(RewriteRecursion::Continue)
@@ -163,6 +167,7 @@ impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for GetMinRange {
             exec.partition_min_range = min_range;
             debug!("is_score: {}", self.is_score);
             exec.is_score = self.is_score;
+            exec.offsets = self.indexes.take();
             exec.predicate = Some(self.predicate
                 .take()
                 .unwrap()

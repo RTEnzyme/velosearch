@@ -1,11 +1,11 @@
-use std::{any::Any, sync::Arc, task::Poll, mem::size_of_val};
+use std::{any::Any, sync::Arc, task::Poll, mem::size_of_val, ops::Range};
 
 use async_trait::async_trait;
 use datafusion::{
     arrow::{datatypes::{SchemaRef, Schema, Field, DataType}, record_batch::RecordBatch, array::UInt64Array, compute::and}, 
     datasource::TableProvider, 
     logical_expr::TableType, execution::context::SessionState, prelude::Expr, error::{Result, DataFusionError}, 
-    physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream, metrics::{ExecutionPlanMetricsSet, MetricsSet}}, common::TermMeta};
+    physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType, project_schema, RecordBatchStream, metrics::{ExecutionPlanMetricsSet, MetricsSet}, EmptyRecordBatchStream}, common::TermMeta};
 use futures::Stream;
 use adaptive_hybrid_trie::TermIdx;
 use serde::{Serialize, ser::SerializeStruct};
@@ -130,7 +130,8 @@ pub struct PostingExec {
     pub term_idx: Arc<TermIdx<TermMeta>>,
     pub projected_schema: SchemaRef,
     pub projection: Option<Vec<usize>>,
-    pub partition_min_range: Option<Vec<Arc<UInt64Array>>>,
+    pub partition_min_range: Option<Arc<UInt64Array>>,
+    pub offsets: Option<Vec<usize>>,
     pub is_score: bool,
     pub projected_term_meta: Vec<Option<TermMeta>>,
     pub predicate: Option<BooleanEvalExpr>,
@@ -165,7 +166,7 @@ impl ExecutionPlan for PostingExec {
 
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> datafusion::physical_plan::Partitioning {
-        Partitioning::UnknownPartitioning(self.partitions.len())
+        Partitioning::UnknownPartitioning(self.partitions_num)
     }
 
     fn output_ordering(&self) -> Option<&[datafusion::physical_expr::PhysicalSortExpr]> {
@@ -186,24 +187,35 @@ impl ExecutionPlan for PostingExec {
             partition: usize,
             context: Arc<datafusion::execution::context::TaskContext>,
         ) -> Result<datafusion::physical_plan::SendableRecordBatchStream> {
+        let task_len = self.partition_min_range.as_ref().unwrap().len();
+        let batch_len = if self.partitions_num * 5 > task_len {
+            if partition * 5 > task_len {
+                return Ok(Box::pin(EmptyRecordBatchStream::new(self.projected_schema.clone())));
+            }
+
+            5
+        } else {
+            task_len / self.partitions_num
+        };
         debug!("Start PostingExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         let predicate_ref = self.predicate.as_ref().map(|v| v.valid_idx.as_ref());
         let (distris, (indices, is_encoding)) = self.projected_term_meta.iter()
             .enumerate()
             .map(|(n, v)| match v {
-                Some(v) => (Some(v.distribution[partition].clone()), (v.index[partition].clone(), predicate_ref.map(|v| v.contains(&n)).unwrap_or(false))),
+                Some(v) => (Some(v.distribution[0].clone()), (v.index[0].clone(), predicate_ref.map(|v| v.contains(&n)).unwrap_or(false))),
                 None => (None, (None, false)),
             })
             .unzip();
         Ok(Box::pin(PostingStream::try_new(
-            self.partitions[partition].clone(),
+            self.partitions[0].clone(),
             self.projected_schema.clone(),
-            self.partition_min_range.as_ref().unwrap()[partition].clone(),
+            self.partition_min_range.as_ref().unwrap().clone(),
             distris,
             indices,
             self.predicate.clone(),
             is_encoding,
             self.is_score,
+            (batch_len * partition)..(batch_len * partition + batch_len)
         )?))
     }
 
@@ -247,7 +259,7 @@ impl PostingExec {
         term_idx: Arc<TermIdx<TermMeta>>,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
-        partition_min_range: Option<Vec<Arc<UInt64Array>>>,
+        partition_min_range: Option<Arc<UInt64Array>>,
         projected_term_meta: Vec<Option<TermMeta>>,
         partitions_num: usize,
     ) -> Result<Self> {
@@ -259,6 +271,7 @@ impl PostingExec {
             projected_schema,
             projection,
             partition_min_range,
+            offsets: None,
             is_score: false,
             projected_term_meta,
             predicate: None,
@@ -303,6 +316,8 @@ pub struct PostingStream {
     predicate: Option<BooleanEvalExpr>,
     ///
     is_encoding: Vec<bool>,
+    /// task range
+    task_range: Range<usize>,
 }
 
 impl PostingStream {
@@ -316,6 +331,7 @@ impl PostingStream {
         predicate: Option<BooleanEvalExpr>,
         is_encoding: Vec<bool>,
         is_score: bool,
+        task_range: Range<usize>,
     ) -> Result<Self> {
         debug!("Try new a PostingStream");
         Ok(Self {
@@ -326,8 +342,9 @@ impl PostingStream {
             is_score,
             indices,
             predicate,
-            index: 0,
+            index: task_range.start,
             is_encoding,
+            task_range,
         })
     }
 }
@@ -336,8 +353,10 @@ impl Stream for PostingStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(mut self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
+
         loop {
-            if self.index >= self.min_range.len() {
+            debug!("index: {:}, task_range: {:?}", self.index, self.task_range);
+            if self.index >= self.min_range.len() || self.index >= self.task_range.end {
                 return Poll::Ready(None);
             }
             if true {
