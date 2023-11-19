@@ -1,4 +1,4 @@
-use std::{any::Any, ptr::NonNull, sync::Arc, arch::x86_64::{_mm512_loadu_epi64, __m512i}};
+use std::{any::Any, ptr::NonNull, sync::Arc, arch::x86_64::{_mm512_loadu_epi64, __m512i, _mm_prefetch, _MM_HINT_T1}};
 
 use datafusion::{physical_plan::{PhysicalExpr, ColumnarValue}, arrow::{datatypes::DataType, record_batch::RecordBatch, array::{BooleanArray, ArrayData}, buffer::Buffer}, error::DataFusionError};
 use tracing::debug;
@@ -92,7 +92,9 @@ impl ShortCircuit {
                             for off in *ids {
                                     *bitmap.get_unchecked_mut((*off >> 6) as usize) |= 1 << (*off % (1 << 6));
                             }
-                            bitmap.as_ptr() as *const u8
+                            let data = bitmap.as_ptr() as *const u8;
+                            _mm_prefetch::<_MM_HINT_T1>(data as *const i8);
+                            data
                             // test.as_ptr() as *const u8
                         }
                         _ => unreachable!()

@@ -2,7 +2,7 @@ use std::{sync::Arc, ops::Index, collections::BTreeMap, mem::size_of_val, ptr::N
 
 use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type, ToByteSlice}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray, GenericBinaryArray, GenericBinaryBuilder, UInt64Array}, record_batch::{RecordBatch, RecordBatchOptions}, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
 use serde::{Serialize, Deserialize};
-use tracing::debug;
+use tracing::{debug, info};
 use crate::{utils::{Result, FastErr, vec::{store_advance_aligned, set_vec_len_by_ptr}}, physical_expr::{BooleanEvalExpr, boolean_eval::{Chunk, TempChunk}}};
 
 
@@ -36,7 +36,7 @@ impl BatchRange {
     }
 }
 
-pub type PostingList = GenericBinaryArray<i16>;
+pub type PostingList = GenericBinaryArray<i32>;
 pub type TermSchemaRef = SchemaRef;
 pub type BatchFreqs = Vec<Arc<GenericListArray<i32>>>;
 
@@ -53,14 +53,16 @@ pub struct PostingBatch {
 }
 
 impl PostingBatch {
-    pub fn memory_consumption(&self) -> usize {
-        let postings: usize = self.postings.iter()
-            .map(|v| {
-                v.get_array_memory_size()
-            })
-            .sum();
+    pub fn memory_consumption(&self) -> (usize, usize, usize) {
+        let mut offset: usize = 0;
+        let mut postings: usize = 0;
+        self.postings.iter()
+            .for_each(|v| {
+                postings += v.data_ref().buffers()[0].capacity();
+                offset += v.data_ref().buffers()[1].capacity();
+            });
         let boundary = size_of_val(&self.boundary);
-        postings + boundary
+        (postings + boundary + offset, postings, offset) 
     }
 
     pub fn try_new(
@@ -521,17 +523,24 @@ impl PostingBatchBuilder {
         let mut freqs = Vec::new();
         let mut boundarys = Vec::new();
         
+        let mut id_num: usize = 0;
+        let mut bitmap_num: usize = 0;
+        let mut doc_num: usize = 0;
+        let mut binary_num: usize = 0;
         for (i, (k, v)) in term_dict.into_iter().enumerate() {
+                doc_num += v.len();
+
                 let mut boundary = vec![0];
                 let mut cnter = 0;
-                let mut posting_builder = GenericBinaryBuilder::new();
                 let mut builder_len = 0;
                 let mut batch_num = 0;
                 if idx.is_some() {
                     idx.as_ref().unwrap().borrow_mut().get_mut(&k).unwrap().add_idx(i as u32, partition_num);
                 }
                 let mut freq: Vec<Option<Vec<Option<u8>>>> = vec![None; 4];
-                let mut buffer: Vec<u16> = Vec::new();
+                let mut binary_buffer: Vec<Vec<u8>> = Vec::new();
+                let mut buffer: Vec<u16> = Vec::with_capacity(512);
+                let mut byte_num = 0;
                 v.into_iter()
                 .for_each(|(p, f)| {
                     if p - cnter < 512 {
@@ -539,26 +548,26 @@ impl PostingBatchBuilder {
                     } else {
                         let skip_num = (p - cnter) / 512;
                         cnter += skip_num * 512;
-
-                        let skip_boundary = (batch_num + skip_num) / 64 - batch_num / 64;
-                        for _ in 0..skip_boundary{
-                            boundary.push(builder_len);
-                        }
-                        batch_num += skip_num;
+                        batch_num += 1;
                         
-                        if buffer.len() > 16 {
+                        boundary.push(builder_len);
+                        if buffer.len() > 32 {
+                            bitmap_num += 1;
                             let mut bitmap: Vec<u64> = vec![0; 8];
                             for i in &buffer {
                                 let off = *i;
                                 bitmap[(off >> 6) as usize] |= 1 << (off % (1 << 6));
                             }
-                            posting_builder.append_value(bitmap.to_byte_slice());
+                            byte_num += bitmap.len() * 8;
+                            binary_buffer.push(bitmap.to_byte_slice().to_vec());
                             builder_len += 1;
                         } else if buffer.len() > 0 {
-                            posting_builder.append_value(unsafe {
+                            id_num += 1;
+                            binary_buffer.push(unsafe {
                                 let value = buffer.as_slice().align_to::<u8>();
                                 assert!(value.0.len() == 0 && value.2.len() == 0);
-                                value.1
+                                byte_num += value.1.len();
+                                value.1.to_vec()
                             });
                             builder_len += 1;
                         }
@@ -578,26 +587,39 @@ impl PostingBatchBuilder {
                 });
 
                 if buffer.len() > 0 {
-                    if buffer.len() > 16 {
+                    if buffer.len() >= 16 {
                         let mut bitmap: Vec<u64> = vec![0; 8];
                         for i in &buffer {
                             let off = *i;
                             bitmap[(off >> 6) as usize] |= 1 << (off % (1 << 6));
                         }
-                        posting_builder.append_value(bitmap.to_byte_slice());
+                        byte_num += bitmap.len() * 8;
+                        binary_buffer.push(bitmap.to_byte_slice().to_vec());
                     } else {
-                        posting_builder.append_value(unsafe {
+                        binary_buffer.push(unsafe {
                             let value = buffer.as_slice().align_to::<u8>();
                             assert!(value.0.len() == 0 && value.2.len() == 0);
-                            value.1
+                            byte_num += value.1.len();
+                            value.1.to_vec()
                         });
                     }
                 }
                 freqs.push(Arc::new(GenericListArray::<i32>::from_iter_primitive::<UInt8Type, _, _>(freq)));
+                binary_num += binary_buffer.len();
+                let mut posting_builder = GenericBinaryBuilder::with_capacity(binary_buffer.len(), byte_num);
+                for batch in binary_buffer {
+                    posting_builder.append_value(batch);
+                }
                 schema_list.push(Field::new(k.clone(), DataType::UInt32, false));
-                postings.push(Arc::new(posting_builder.finish()));
+                let posting = posting_builder.finish();
+
+                postings.push(Arc::new(posting));
                 boundarys.push(boundary);
         }
+        info!("id list size: {:}", id_num);
+        info!("bitmap size: {:}", bitmap_num);
+        info!("doc num: {:}", doc_num);
+        info!("binary len: {:}", binary_num);
         schema_list.push(Field::new("__id__", DataType::UInt32, false));
         postings.push(Arc::new(PostingList::from(vec![] as Vec<&[u8]>)));
         PostingBatch::try_new_with_freqs(

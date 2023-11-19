@@ -47,12 +47,16 @@ impl PostingTable {
     }
 
     pub fn memory_consumption(&self) -> usize {
-        let postings: usize = self.postings.iter()
-            .map(|v| {
-                v.memory_consumption()
-            })
-            .sum();
+        let mut postings: usize = 0;
+        let mut offsets: usize = 0;
+        self.postings.iter()
+            .for_each(|v| {
+                let size = v.memory_consumption();
+                postings += size.1;
+                offsets += size.2;
+            });
         info!("posting size: {:}", postings);
+        info!("offsets size: {:}", offsets);
         postings
     }
 
@@ -388,21 +392,6 @@ pub fn make_posting_schema(fields: Vec<&str>) -> Schema {
         .map(|f| Field::new(f, DataType::Boolean, false))
         .collect(), vec![Field::new("__id__", DataType::UInt32, false)]].concat()
     )
-}
-
-/// Concatenates an array of `RecordBatch` into one batch
-pub fn concat_batches(
-    schema: &SchemaRef,
-    batches: &[RecordBatch],
-    row_count: usize,
-) -> Result<RecordBatch> {
-    debug!(
-        "Combined {} batches containing {} rows",
-        batches.len(),
-        row_count
-    );
-    let b = datafusion::arrow::compute::concat_batches(schema, batches)?;
-    Ok(b)
 }
 
 

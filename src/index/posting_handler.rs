@@ -91,6 +91,7 @@ impl HandlerT for PostingHandler {
         let partition_nums = self.partition_nums;
         let ctx = BooleanContext::new();
         let space = self.posting_table.as_ref().unwrap().memory_consumption();
+        info!("space usage: {:}", space);
         ctx.register_index(TableReference::Bare { table: "__table__".into() }, Arc::new(self.posting_table.take().unwrap()))?;
         let table = ctx.index("__table__").await?;
         let mut test_iter = self.test_case.clone().into_iter();
@@ -136,7 +137,7 @@ impl HandlerT for PostingHandler {
                 // let predicate = BooleanPredicateBuilder::should(&["and", "the"]).unwrap();
                 // let predicate = predicate.with_must(predicate1).unwrap();
                 // let predicate = predicate.build();
-                let query = "lord of the ring";
+                let query = "lord AND of AND the AND ring";
                 let predicate = if let Ok(expr) = parser::boolean(query) {
                     expr
                 } else {
@@ -239,6 +240,8 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
             keys.push(m.0); 
             values.push(m.1.build());
         });
+    let consumption: usize = values.iter().map(|v| v.memory_consumption()).sum();
+    info!("term_idx consumption: {:}", consumption);
     
     let (fields_index, fields) = keys.iter()
         .chain([&"__id__".to_string()].into_iter())
