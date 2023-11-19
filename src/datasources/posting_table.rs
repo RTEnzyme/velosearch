@@ -17,6 +17,7 @@ pub struct PostingTable {
     schema: SchemaRef,
     term_idx: Arc<TermIdx<TermMeta>>,
     postings: Vec<Arc<PostingBatch>>,
+    partitions_num: usize,
 }
 
 impl PostingTable {
@@ -25,12 +26,14 @@ impl PostingTable {
         term_idx: Arc<TermIdx<TermMeta>>,
         batches: Vec<Arc<PostingBatch>>,
         _range: &BatchRange,
+        partitions_num: usize,
     ) -> Self {
         // construct field map to index the position of the fields in schema
         Self {
             schema,
             term_idx,
             postings: batches,
+            partitions_num,
         }
     }
 
@@ -115,6 +118,7 @@ impl TableProvider for PostingTable {
             projection.cloned(),
             None,
             vec![],
+            self.partitions_num,
         )?))
     }
 }
@@ -130,6 +134,7 @@ pub struct PostingExec {
     pub is_score: bool,
     pub projected_term_meta: Vec<Option<TermMeta>>,
     pub predicate: Option<BooleanEvalExpr>,
+    partitions_num: usize,
     metric: ExecutionPlanMetricsSet,
 }
 
@@ -244,6 +249,7 @@ impl PostingExec {
         projection: Option<Vec<usize>>,
         partition_min_range: Option<Vec<Arc<UInt64Array>>>,
         projected_term_meta: Vec<Option<TermMeta>>,
+        partitions_num: usize,
     ) -> Result<Self> {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
         Ok(Self {
@@ -256,6 +262,7 @@ impl PostingExec {
             is_score: false,
             projected_term_meta,
             predicate: None,
+            partitions_num,
             metric: ExecutionPlanMetricsSet::new(),
         })
     }

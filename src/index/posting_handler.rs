@@ -27,7 +27,7 @@ impl PostingHandler {
         .filter(RemoveLongFilter::limit(40))
         .filter(LowerCaser);
         if let Some(p) = dump_path.clone() {
-            if let Some(t) = deserialize_posting_table(p) {
+            if let Some(t) = deserialize_posting_table(p, partition_nums) {
                 return Self {
                     test_case: vec![],
                     partition_nums,
@@ -173,7 +173,8 @@ impl HandlerT for PostingHandler {
 }
 
 
-fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: usize, batch_size: u32, dump_path: Option<String>) -> PostingTable {
+fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, _partition_nums: usize, batch_size: u32, dump_path: Option<String>) -> PostingTable {
+    let partition_nums = 0;
     let _span = span!(Level::INFO, "PostingHanlder to_batch").entered();
     let num_512 = (length as u32 + batch_size - 1) / batch_size;
     let num_512_partition = (num_512 + partition_nums as u32 - 1) / (partition_nums as u32);
@@ -285,6 +286,7 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, partition_nums: us
         term_idx,
         partition_batch,
         &BatchRange::new(0, (num_512_partition * batch_size) as u32),
+        1,
     )
 }
 

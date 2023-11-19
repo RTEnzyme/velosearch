@@ -11,11 +11,15 @@ static GLOBAL: Jemalloc = Jemalloc;
 async fn main() {
     // tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).init();
     let args: Vec<String> = env::args().collect();
-    main_inner(args[1].to_owned()).await.unwrap();
+    let partition_num = match args.get(2) {
+        Some(p) => p.parse().unwrap(),
+        None => 1,
+    };
+    main_inner(args[1].to_owned(), partition_num).await.unwrap();
 }
 
-async fn main_inner(index_dir: String) -> Result<()> {
-    let posting_table = deserialize_posting_table(index_dir).unwrap();
+async fn main_inner(index_dir: String, partitions_num: usize) -> Result<()> {
+    let posting_table = deserialize_posting_table(index_dir, partitions_num).unwrap();
     let ctx = BooleanContext::new();
     ctx.register_index(TableReference::Bare { table: "__table__".into() }, Arc::new(posting_table))?;
     let _ = AOT_PRIMITIVES.len();

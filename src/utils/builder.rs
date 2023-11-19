@@ -43,7 +43,7 @@ pub fn serialize_term_meta(term_meta: &Vec<TermMeta>, dump_path: String) {
     bincode::serialize_into::<_, Vec<TermMetaTemp>>(writer, &term_metas).unwrap();
 }
 
-pub fn deserialize_posting_table(dump_path: String) -> Option<PostingTable> {
+pub fn deserialize_posting_table(dump_path: String, partitions_num: usize) -> Option<PostingTable> {
     info!("Deserialize data from {:}", dump_path);
     let path = PathBuf::from(dump_path);
     let posting_batch: Vec<PostingBatchBuilder>;
@@ -130,5 +130,6 @@ pub fn deserialize_posting_table(dump_path: String) -> Option<PostingTable> {
         term_idx,
         partition_batch,
         &batch_range,
+        partitions_num,
     ))
 }
