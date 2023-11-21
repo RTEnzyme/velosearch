@@ -1,6 +1,6 @@
 use std::{sync::Arc, ops::Index, collections::BTreeMap, mem::size_of_val, ptr::NonNull, cell::RefCell, arch::x86_64::{_pext_u64, _blsr_u64, _mm512_popcnt_epi64, _mm512_reduce_add_epi64, _mm512_setzero_si512, _mm512_add_epi64}, slice::from_raw_parts};
 
-use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type, ToByteSlice}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray, GenericBinaryArray, GenericBinaryBuilder, UInt64Array}, record_batch::{RecordBatch, RecordBatchOptions}, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
+use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type, ToByteSlice, Int32Type, Int64Type}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray, GenericBinaryArray, GenericBinaryBuilder, UInt64Array, RunArray, Int64Array, PrimitiveRunBuilder, Int64RunArray}, record_batch::{RecordBatch, RecordBatchOptions}, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
 use serde::{Serialize, Deserialize};
 use tracing::{debug, info};
 use crate::{utils::{Result, FastErr, vec::{store_advance_aligned, set_vec_len_by_ptr}}, physical_expr::{BooleanEvalExpr, boolean_eval::{Chunk, TempChunk}}};
@@ -38,7 +38,8 @@ impl BatchRange {
 
 pub type PostingList = GenericBinaryArray<i32>;
 pub type TermSchemaRef = SchemaRef;
-pub type BatchFreqs = Vec<Arc<GenericListArray<i32>>>;
+pub type Freqs = Arc<GenericListArray<i32>>;
+pub type BatchFreqs = Vec<Freqs>;
 
 
 /// A batch of Postinglist which contain serveral terms,
@@ -62,7 +63,13 @@ impl PostingBatch {
                 offset += v.data_ref().buffers()[1].capacity();
             });
         let boundary = size_of_val(&self.boundary);
-        (postings + boundary + offset, postings, offset) 
+        let freqs = match &self.term_freqs {
+            Some(m) => m.iter().map(|v| {
+                v.data().buffers()[0].len()*2 + v.data().child_data()[0].len()
+            }).sum::<usize>(),
+            None => 0,
+        };
+        (postings + boundary + offset + freqs, postings, offset) 
     }
 
     pub fn try_new(
@@ -637,6 +644,7 @@ fn clear_lowest_set_bit(v: u64) -> u64 {
     unsafe { _blsr_u64(v) }
 }
 
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct TermMetaBuilder {
     pub distribution: Vec<Vec<u64>>,
@@ -672,6 +680,14 @@ impl TermMetaBuilder {
         self.idx[partition_num] = Some(idx);
     }
 
+    pub fn rle_usage(&self) -> usize {
+        let mut builder = PrimitiveRunBuilder::<Int64Type, Int64Type>::with_capacity(self.distribution[0].len());
+        for i in &self.distribution[0] {
+            builder.append_value(*i as i64);
+        }
+        let array: Int64RunArray = builder.finish();
+        array.get_array_memory_size()
+    }
 
     pub fn build(self) -> TermMeta {
         let (distribution, index): (Vec<Arc<UInt64Array>>, _)= (0..self.partition_num)

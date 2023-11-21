@@ -52,15 +52,17 @@ impl PostingTable {
     pub fn memory_consumption(&self) -> usize {
         let mut postings: usize = 0;
         let mut offsets: usize = 0;
+        let mut all: usize = 0;
         self.postings.iter()
             .for_each(|v| {
                 let size = v.memory_consumption();
+                all += size.0;
                 postings += size.1;
                 offsets += size.2;
             });
         info!("posting size: {:}", postings);
         info!("offsets size: {:}", offsets);
-        postings
+        all
     }
 
     // pub fn serialize(&self, path: &Path) -> Result<()> {

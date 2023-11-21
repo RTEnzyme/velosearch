@@ -1,11 +1,11 @@
-use std::{sync::Arc, any::Any, cell::SyncUnsafeCell, arch::x86_64::{__m512i, _mm512_and_epi64, _mm512_or_epi64, _mm512_loadu_epi64}, slice::from_raw_parts};
+use std::{sync::Arc, any::Any, cell::SyncUnsafeCell, arch::x86_64::{__m512i, _mm512_and_epi64, _mm512_or_epi64, _mm512_loadu_epi64, _mm512_loadu_epi8, _mm512_mask_compressstoreu_epi8}, slice::from_raw_parts};
 
 use dashmap::DashSet;
-use datafusion::{physical_plan::{expressions::{BinaryExpr, Column}, PhysicalExpr, ColumnarValue}, arrow::{datatypes::{Schema, DataType}, record_batch::RecordBatch, array::UInt64Array}, error::DataFusionError, common::{Result, cast::as_uint64_array}};
+use datafusion::{physical_plan::{expressions::{BinaryExpr, Column}, PhysicalExpr, ColumnarValue}, arrow::{datatypes::{Schema, DataType}, record_batch::RecordBatch, array::{UInt64Array, Int8Array, UInt8Array, Array}}, error::DataFusionError, common::{Result, cast::as_uint64_array}};
 use sorted_iter::{assume::AssumeSortedByItemExt, SortedIterator};
 use tracing::{debug, info};
 
-use crate::{ShortCircuit, utils::avx512::{avx512_bitwise_and, avx512_bitwise_or, U64x8}};
+use crate::{ShortCircuit, utils::avx512::{avx512_bitwise_and, avx512_bitwise_or, U64x8}, batch::{BatchFreqs, Freqs}};
 
 #[derive(Clone, Debug)]
 pub enum Primitives {
@@ -107,7 +107,13 @@ pub enum PhysicalPredicate {
 }
 
 impl PhysicalPredicate {
-    pub fn eval_avx512(&self, batch: &Vec<Option<Vec<Chunk>>>, init_v: Option<Vec<TempChunk>>, is_and: bool, valid_num: usize) -> Result<Option<Vec<TempChunk>>> {
+    pub fn eval_avx512(
+        &self,
+        batch: &Vec<Option<Vec<Chunk>>>,
+        init_v: Option<Vec<TempChunk>>,
+        is_and: bool,
+        valid_num: usize
+    ) -> Result<Option<Vec<TempChunk>>> {
         let mut init_v = init_v;
         match self {
             PhysicalPredicate::And { args } => {
@@ -467,6 +473,43 @@ impl PartialEq<dyn Any> for BooleanEvalExpr {
 #[inline(always)]
 fn load_u64_slice(bitmap: &&[u64]) -> __m512i {
     unsafe { _mm512_loadu_epi64((*bitmap).as_ptr() as *const i64) }
+}
+
+fn freqs_filter(freqs: Vec<Freqs>, mask: &[u64]) -> Vec<Arc<UInt8Array>> {
+    let offs: Vec<u32> = mask.iter().map(|v| v.count_ones()).collect();
+    let sum: u32 = offs.iter().map(|v| *v).sum();
+    let valid_freqs: Vec<Arc<UInt8Array>> = freqs.iter()
+        .map(|freq| {
+            let mut valid_freqs: Vec<u8> = Vec::with_capacity(sum as usize);
+            let mut cnter = 0;
+            freq
+                .iter()
+                .zip(mask.into_iter())
+                .enumerate()
+                .filter(|(_, (_, m))| **m != 0)
+                .for_each(|(i, (v, m))| {
+                    match v {
+                        Some(v) => {
+                            let data = v.as_any().downcast_ref::<UInt8Array>().unwrap();
+                            let freqs_ptr = data.data().buffers()[0].as_ptr() as *const i8;
+                            unsafe {
+                                let freqs = _mm512_loadu_epi8(freqs_ptr);
+                                _mm512_mask_compressstoreu_epi8(valid_freqs.as_mut_ptr().offset(cnter), *m, freqs);
+                                cnter += offs[i] as isize;
+                            }
+                        }
+                        None => {  }
+                    };
+
+                });
+                unsafe {
+                    valid_freqs.set_len(sum as usize);
+                };
+                Arc::new(UInt8Array::from(valid_freqs))
+
+        })
+        .collect();
+    valid_freqs
 }
 
 #[cfg(test)]

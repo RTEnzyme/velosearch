@@ -2,7 +2,7 @@ use core::time;
 use std::{collections::{HashSet, BTreeMap, HashMap}, sync::Arc, fs::File, io::BufWriter, path::PathBuf, cell::RefCell};
 
 use async_trait::async_trait;
-use datafusion::{sql::TableReference, arrow::datatypes::{Schema, DataType, Field}, datasource::provider_as_source, common::cast::as_int64_array};
+use datafusion::{sql::TableReference, arrow::datatypes::{Schema, DataType, Field}, datasource::provider_as_source, common::TermMeta};
 use adaptive_hybrid_trie::TermIdx;
 use rand::{thread_rng, seq::IteratorRandom};
 use tantivy::tokenizer::{TextAnalyzer, SimpleTokenizer, RemoveLongFilter, LowerCaser, Stemmer};
@@ -174,10 +174,11 @@ impl HandlerT for PostingHandler {
 
 
 fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, _partition_nums: usize, batch_size: u32, dump_path: Option<String>) -> PostingTable {
-    let partition_nums = 0;
+    let partition_nums = 1;
     let _span = span!(Level::INFO, "PostingHanlder to_batch").entered();
     let num_512 = (length as u32 + batch_size - 1) / batch_size;
-    let num_512_partition = (num_512 + partition_nums as u32 - 1) / (partition_nums as u32);
+    // let num_512_partition = (num_512 + partition_nums as u32 - 1) / (partition_nums as u32);
+    let num_512_partition = num_512 + partition_nums as u32 - 1;
 
     info!("num_512: {}, num_512_partition: {}", num_512, num_512_partition);
     let mut partition_batch = Vec::new();
@@ -241,8 +242,8 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, _partition_nums: u
             keys.push(m.0); 
             values.push(m.1.build());
         });
-    let consumption: usize = values.iter().map(|v| v.memory_consumption()).sum();
-    info!("term_idx consumption: {:}", consumption);
+    // let consumption: usize = values.iter().map(|v| v..memory_consumption()).sum();
+    // info!("term_idx consumption: {:}", consumption);
     
     let (fields_index, fields) = keys.iter()
         .chain([&"__id__".to_string()].into_iter())

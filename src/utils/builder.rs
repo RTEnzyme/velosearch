@@ -1,7 +1,7 @@
 use std::{path::PathBuf, collections::HashMap, fs::File, io::{BufReader, BufWriter}, sync::Arc};
 
 use adaptive_hybrid_trie::TermIdx;
-use datafusion::{arrow::{datatypes::{Schema, Field, DataType}, array::UInt64Array}, common::TermMeta};
+use datafusion::{arrow::{datatypes::{Schema, Field, DataType, Int64Type, Int16Type}, array::{UInt64Array, PrimitiveRunBuilder, Int64RunArray, Array, Int16RunArray}}, common::TermMeta};
 use tracing::info;
 
 use crate::{datasources::posting_table::PostingTable, batch::{PostingBatchBuilder, BatchRange}};
@@ -18,11 +18,27 @@ struct TermMetaTemp {
     pub selectivity: f64,
 }
 
+impl TermMetaTemp {
+    pub fn rle_usage(&self) -> usize {
+        let mut real = 1;
+        let mut run = 1;
+        let mut cur = 0;
+        for &i in &self.distribution[0] {
+            if i != cur {
+                real += 1;
+                run += 1;
+                cur = i;
+            }
+        }
+        run * 2 + real * 8
+    }
+}
+
 pub fn serialize_term_meta(term_meta: &Vec<TermMeta>, dump_path: String) {
     let path = PathBuf::from(dump_path);
     let f = File::create(path.join(PathBuf::from("term_values.bin"))).unwrap();
     let writer = BufWriter::new(f);
-    let term_metas = term_meta
+    let term_metas: Vec<TermMetaTemp> = term_meta
         .iter()
         .map(|v| {
             let distribution: Vec<Vec<u64>> = v.distribution
@@ -40,6 +56,9 @@ pub fn serialize_term_meta(term_meta: &Vec<TermMeta>, dump_path: String) {
             }
         })
         .collect();
+    let consumption: usize = term_metas.iter().map(|v| v.rle_usage()).sum();
+    info!("terms len: {:}", term_metas.len());
+    info!("Compressed index consumption: {:}", consumption);
     bincode::serialize_into::<_, Vec<TermMetaTemp>>(writer, &term_metas).unwrap();
 }
 
@@ -103,9 +122,11 @@ pub fn deserialize_posting_table(dump_path: String, partitions_num: usize) -> Op
         .collect();
 
     let mut memory_consume = 0;
-    let values = values
+    let mut compressed_consume = 0;
+    let values: Vec<TermMeta> = values
         .into_iter()
         .map(|v| {
+            compressed_consume += v.rle_usage();
             let distris = v.distribution
                 .into_iter()
                 .map(|v| {
@@ -122,7 +143,9 @@ pub fn deserialize_posting_table(dump_path: String, partitions_num: usize) -> Op
             termmeta
         })
         .collect();
+    info!("term len: {:}", values.len());
     info!("term index: {:}", memory_consume);
+    info!("compreed index: {:}", compressed_consume);
     let term_idx = Arc::new(TermIdx::new(keys, values, 20));
 
     Some(PostingTable::new(

@@ -1,6 +1,6 @@
 mod posting_batch;
 
-pub use posting_batch::{PostingBatch, BatchRange, PostingBatchBuilder, TermMetaBuilder};
+pub use posting_batch::{PostingBatch, BatchRange, PostingBatchBuilder, TermMetaBuilder, BatchFreqs, Freqs};
 
 #[cfg(test)]
 mod tests {
