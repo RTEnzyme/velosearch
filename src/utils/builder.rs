@@ -2,7 +2,7 @@ use std::{path::PathBuf, collections::HashMap, fs::File, io::{BufReader, BufWrit
 
 use adaptive_hybrid_trie::TermIdx;
 use datafusion::{arrow::{datatypes::{Schema, Field, DataType, Int64Type, Int16Type}, array::{UInt64Array, PrimitiveRunBuilder, Int64RunArray, Array, Int16RunArray}}, common::TermMeta};
-use tracing::info;
+use tracing::{info, debug};
 
 use crate::{datasources::posting_table::PostingTable, batch::{PostingBatchBuilder, BatchRange}};
 
@@ -113,6 +113,7 @@ pub fn deserialize_posting_table(dump_path: String, partitions_num: usize) -> Op
         metadata: HashMap::new(),
         fields_index: Some(fields_index),
     };
+
 
     let partition_batch = posting_batch
         .into_iter()

@@ -112,7 +112,7 @@ impl PhysicalPredicate {
         batch: &Vec<Option<Vec<Chunk>>>,
         init_v: Option<Vec<TempChunk>>,
         is_and: bool,
-        valid_num: usize
+        valid_num: usize,
     ) -> Result<Option<Vec<TempChunk>>> {
         let mut init_v = init_v;
         match self {
@@ -475,7 +475,7 @@ fn load_u64_slice(bitmap: &&[u64]) -> __m512i {
     unsafe { _mm512_loadu_epi64((*bitmap).as_ptr() as *const i64) }
 }
 
-fn freqs_filter(freqs: Vec<Freqs>, mask: &[u64]) -> Vec<Arc<UInt8Array>> {
+pub fn freqs_filter(freqs: &Vec<Option<Vec<Option<&[u8]>>>>, mask: &[u64], offset: usize) -> Vec<Arc<UInt8Array>> {
     let offs: Vec<u32> = mask.iter().map(|v| v.count_ones()).collect();
     let sum: u32 = offs.iter().map(|v| *v).sum();
     let valid_freqs: Vec<Arc<UInt8Array>> = freqs.iter()
@@ -488,10 +488,9 @@ fn freqs_filter(freqs: Vec<Freqs>, mask: &[u64]) -> Vec<Arc<UInt8Array>> {
                 .enumerate()
                 .filter(|(_, (_, m))| **m != 0)
                 .for_each(|(i, (v, m))| {
-                    match v {
+                    match v[offset] {
                         Some(v) => {
-                            let data = v.as_any().downcast_ref::<UInt8Array>().unwrap();
-                            let freqs_ptr = data.data().buffers()[0].as_ptr() as *const i8;
+                            let freqs_ptr = v.as_ptr() as *const i8;
                             unsafe {
                                 let freqs = _mm512_loadu_epi8(freqs_ptr);
                                 _mm512_mask_compressstoreu_epi8(valid_freqs.as_mut_ptr().offset(cnter), *m, freqs);

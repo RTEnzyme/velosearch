@@ -190,12 +190,12 @@ impl ExecutionPlan for PostingExec {
             context: Arc<datafusion::execution::context::TaskContext>,
         ) -> Result<datafusion::physical_plan::SendableRecordBatchStream> {
         let task_len = self.partition_min_range.as_ref().unwrap().len();
-        let batch_len = if self.partitions_num * 5 > task_len {
-            if partition * 5 > task_len {
+        let batch_len = if self.partitions_num * 10 > task_len {
+            if partition * 10 > task_len {
                 return Ok(Box::pin(EmptyRecordBatchStream::new(self.projected_schema.clone())));
             }
 
-            5
+            10
         } else {
             task_len / self.partitions_num
         };
@@ -378,15 +378,27 @@ impl Stream for PostingStream {
                         }
                     })
                     .collect();
-                let batch = self.posting_lists.project_with_predicate(
-                    &self.indices,
-                    self.schema.clone(),
-                    &distris,
-                    self.index,
-                    min_range,
-                    self.predicate.as_ref().unwrap(),
-                    &self.is_encoding,
-                ).unwrap();
+                let batch = if self.is_score {
+                    self.posting_lists.project_with_predicate_with_score(
+                        &self.indices,
+                        self.schema.clone(),
+                        &distris,
+                        self.index,
+                        min_range,
+                        self.predicate.as_ref().unwrap(),
+                        &self.is_encoding,
+                    ).unwrap()
+                } else {
+                    self.posting_lists.project_with_predicate(
+                        &self.indices,
+                        self.schema.clone(),
+                        &distris,
+                        self.index,
+                        min_range,
+                        self.predicate.as_ref().unwrap(),
+                        &self.is_encoding,
+                    ).unwrap()
+                };
                 self.index += 1;
                 let batch = RecordBatch::try_new(
                     Arc::new(Schema::new(vec![Field::new("mask", DataType::UInt64, false)])),

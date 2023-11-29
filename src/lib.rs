@@ -86,7 +86,7 @@ peg::parser!{
             = "+" e:term() {e}
 
         rule term() -> Expr 
-            = e:$(['a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '.' ]*) { col_tokenized(e) }
+            = e:$(['a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '.' ]+) { col_tokenized(e) }
 
         rule _() =  quiet!{[' ' | '\t']*}
     }

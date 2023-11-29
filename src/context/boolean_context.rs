@@ -222,7 +222,7 @@ fn physical_optimizer_rulse() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync
     vec![
         // Arc::new(Repartition::new()),
         Arc::new(MinOperationRange::new()),
-        Arc::new(PrimitivesCombination::new()),
+        // Arc::new(PrimitivesCombination::new()),
         // Arc::new(PartitionPredicateReorder::new()),
         // Arc::new(IntersectionSelection::new()),
         // Arc::new(EnforceDistribution::new()),

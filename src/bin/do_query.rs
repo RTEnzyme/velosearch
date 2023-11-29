@@ -36,6 +36,7 @@ async fn main_inner(index_dir: String, partitions_num: usize) -> Result<()> {
         } else {
             boolean_parser::boolean(&words[1]).unwrap()
         };
+        // let predicate = boolean_parser::boolean(&words[1]).unwrap();
         let index = ctx.boolean_with_provider(table_source.clone(), &schema, predicate, false).await.unwrap();
         let res = index.collect().await.unwrap();
         if res.len() == 0 {

@@ -3,7 +3,7 @@ use std::{sync::Arc, ops::Index, collections::BTreeMap, mem::size_of_val, ptr::N
 use datafusion::{arrow::{datatypes::{SchemaRef, Field, DataType, Schema, UInt8Type, ToByteSlice, Int32Type, Int64Type}, array::{UInt32Array, UInt16Array, ArrayRef, BooleanArray, Array, ArrayData, GenericListArray, GenericBinaryArray, GenericBinaryBuilder, UInt64Array, RunArray, Int64Array, PrimitiveRunBuilder, Int64RunArray}, record_batch::{RecordBatch, RecordBatchOptions}, buffer::Buffer}, from_slice::FromSlice, common::TermMeta};
 use serde::{Serialize, Deserialize};
 use tracing::{debug, info};
-use crate::{utils::{Result, FastErr, vec::{store_advance_aligned, set_vec_len_by_ptr}}, physical_expr::{BooleanEvalExpr, boolean_eval::{Chunk, TempChunk}}};
+use crate::{utils::{Result, FastErr, vec::{store_advance_aligned, set_vec_len_by_ptr}, avx512::U64x8}, physical_expr::{BooleanEvalExpr, boolean_eval::{Chunk, TempChunk, freqs_filter}}};
 
 
 /// The doc_id range [start, end) Batch range determines the  of relevant batch.
@@ -38,7 +38,7 @@ impl BatchRange {
 
 pub type PostingList = GenericBinaryArray<i32>;
 pub type TermSchemaRef = SchemaRef;
-pub type Freqs = Arc<GenericListArray<i32>>;
+pub type Freqs = Arc<GenericBinaryArray<i32>>;
 pub type BatchFreqs = Vec<Freqs>;
 
 
@@ -62,10 +62,11 @@ impl PostingBatch {
                 postings += v.data_ref().buffers()[0].capacity();
                 offset += v.data_ref().buffers()[1].capacity();
             });
-        let boundary = size_of_val(&self.boundary);
+        let boundary: usize = self.boundary.iter().map(|v| v.len() as usize * 2).sum();
         let freqs = match &self.term_freqs {
             Some(m) => m.iter().map(|v| {
-                v.data().buffers()[0].len()*2 + v.data().child_data()[0].len()
+                // v.data().buffers()[0].len() + v.data().buffers()[1].len()
+                v.get_array_memory_size()
             }).sum::<usize>(),
             None => 0,
         };
@@ -209,6 +210,126 @@ impl PostingBatch {
         Ok(RecordBatch::try_new_with_options(projected_schema, batches, &option)?)
     }
 
+    pub fn project_with_predicate_with_score(
+        &self,
+        indices: &[Option<u32>],
+        _projected_schema: SchemaRef,
+        distris: &[Option<u64>],
+        boundary_idx: usize,
+        min_range: u64,
+        predicate: &BooleanEvalExpr,
+        _is_encoding: &Vec<bool>,
+    ) -> Result<usize> {
+        let predicate = predicate.predicate.as_ref().unwrap().get();
+        let predicate_ref = unsafe {predicate.as_ref().unwrap() };
+        let valid_num = min_range.count_ones() as usize;
+        
+        let mut batches: Vec<Option<Vec<Chunk>>> = vec![None; indices.len()];
+        let mut freqs: Vec<Option<Vec<Option<&[u8]>>>> = vec![None; indices.len()];
+        debug!("start select valid batch");
+        const EMPTY: [u64; 8] = [0; 8];
+        for (j, index) in indices.iter().enumerate() {
+            let distri = unsafe { distris.get_unchecked(j).unwrap_unchecked() };
+            let mut write_mask = unsafe { _pext_u64(min_range, distri )};
+            let valid_mask = unsafe { _pext_u64(distri, min_range) };
+            let idx = unsafe { index.unwrap_unchecked() as usize };
+            let (bucket, batch_freq) = if idx != usize::MAX {
+                (self.postings.get(idx).cloned().ok_or_else(|| {
+                    FastErr::InternalErr(format!(
+                        "project index {} out of bounds, max fields {}",
+                        idx,
+                        self.postings.len(),
+                    ))
+                })?, self.term_freqs.as_ref().unwrap()[idx].clone())
+            } else {
+                continue;
+            };
+            let boundary = &self.boundary[idx];
+            if boundary_idx >= boundary.len() {
+                continue;
+            }
+            let start_idx = unsafe { *boundary.get_unchecked(boundary_idx) as usize };
+            let mut posting = Vec::with_capacity(valid_num);
+            let mut posting_ptr = posting.as_mut_ptr();
+
+            let mut freqs_batch: Vec<Option<&[u8]>> = Vec::with_capacity(valid_num);
+
+            for i in 0..valid_num {
+                if valid_mask & (1 << i) != 0 {
+                    let pos = write_mask.trailing_zeros() as usize;
+                    write_mask = clear_lowest_set_bit(write_mask);
+                    let batch = bucket.value(start_idx + pos);
+                    let freq = batch_freq.value(start_idx + pos);
+                    freqs_batch.push(Some(unsafe { from_raw_parts(freq.as_ptr(), freq.len())}));
+                    if batch.len() == 64 {
+                        let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u64, 8) };
+                        unsafe { store_advance_aligned(Chunk::Bitmap(batch), &mut posting_ptr) };
+                    } else {
+                        let batch = unsafe { from_raw_parts(batch.as_ptr() as *const u16, batch.len() / 2) };
+                        // if !encoding {
+                            unsafe { store_advance_aligned(Chunk::IDs(batch), &mut posting_ptr) };
+                        // } else {
+                        //     let mut bitmap: [u64; 8] = [0; 8];
+                        //     for off in batch {
+                        //         unsafe {
+                        //             *bitmap.get_unchecked_mut((*off >> 6) as usize) |= 1 << (*off % (1 << 6));
+                        //         }
+                        //     }
+                        //     // leak_pool.push(bitmap);
+                        //     // let bitmap = Arc::new(bitmap);
+                        //     std::mem::forget(bitmap);
+                        //     unsafe { store_advance_aligned(Chunk::Bitmap(
+                        //         from_raw_parts(bitmap.as_ptr() as *const u64, 8)
+                        //         // from_raw_parts(leak_pool.last().unwrap().as_ptr() as *const u64, 8)
+                        //     ), &mut posting_ptr) };
+                        // }
+                    }
+                } else {
+                    unsafe {
+                        store_advance_aligned(Chunk::Bitmap(&EMPTY), &mut posting_ptr);  
+                    }
+                    freqs_batch.push(None);
+                }
+            }
+            unsafe { set_vec_len_by_ptr(&mut posting, posting_ptr)}
+            batches[j] = Some(posting);
+            freqs[j] = Some(freqs_batch);
+        }
+        
+        debug!("start eval");
+        let eval = predicate_ref.eval_avx512(&batches, None, true, valid_num)?;
+        let mut valid_freqs = Vec::new();
+        debug!("end eval: {:}", eval.is_some());
+        // batches.clear();
+        if let Some(e) = eval {
+            let mut accumulator = 0;
+            let mut id_acc = 0;
+            e.into_iter()
+            .enumerate()
+            .for_each(|(i, v)| unsafe {
+                match  v {
+                    TempChunk::Bitmap(b) => {
+                        let popcnt = _mm512_popcnt_epi64(b);
+                        let cnt = _mm512_reduce_add_epi64(popcnt);
+                        if cnt != 0 {
+                            valid_freqs.push(freqs_filter(&freqs, &U64x8 { vector: b }.vals, i));
+                        }
+                        accumulator += cnt;
+                    }
+                    TempChunk::IDs(i) => {
+                        id_acc += i.len();
+                    }
+                    TempChunk::N0NE => {},
+                }
+            });
+            debug!("sum: {:}", accumulator);
+            // let sum = 0;
+            Ok(accumulator as usize + valid_freqs.len())
+        } else {
+            Ok(0)
+        }
+    }
+
     pub fn project_with_predicate(
         &self,
         indices: &[Option<u32>],
@@ -231,14 +352,14 @@ impl PostingBatch {
             let mut write_mask = unsafe { _pext_u64(min_range, distri )};
             let valid_mask = unsafe { _pext_u64(distri, min_range) };
             let idx = unsafe { index.unwrap_unchecked() as usize };
-            let bucket = if idx != usize::MAX {
-                self.postings.get(idx).cloned().ok_or_else(|| {
+            let (bucket, batch_freq) = if idx != usize::MAX {
+                (self.postings.get(idx).cloned().ok_or_else(|| {
                     FastErr::InternalErr(format!(
                         "project index {} out of bounds, max fields {}",
                         idx,
                         self.postings.len(),
                     ))
-                })?
+                })?, self.term_freqs.as_ref().unwrap()[idx].clone())
             } else {
                 continue;
             };
@@ -249,6 +370,7 @@ impl PostingBatch {
             let start_idx = unsafe { *boundary.get_unchecked(boundary_idx) as usize };
             let mut posting = Vec::with_capacity(valid_num);
             let mut posting_ptr = posting.as_mut_ptr();
+
 
             for i in 0..valid_num {
                 if valid_mask & (1 << i) != 0 {
@@ -293,14 +415,16 @@ impl PostingBatch {
         debug!("end eval: {:}", eval.is_some());
         // batches.clear();
         if let Some(e) = eval {
-            let mut accumulator = unsafe { _mm512_setzero_si512() };
+            let mut accumulator = 0;
             let mut id_acc = 0;
             e.into_iter()
-            .for_each(|v| unsafe {
+            .enumerate()
+            .for_each(|(i, v)| unsafe {
                 match  v {
                     TempChunk::Bitmap(b) => {
                         let popcnt = _mm512_popcnt_epi64(b);
-                        accumulator = _mm512_add_epi64(accumulator, popcnt);
+                        let cnt = _mm512_reduce_add_epi64(popcnt);
+                        accumulator += cnt;
                     }
                     TempChunk::IDs(i) => {
                         id_acc += i.len();
@@ -308,15 +432,13 @@ impl PostingBatch {
                     TempChunk::N0NE => {},
                 }
             });
-            let sum = unsafe { _mm512_reduce_add_epi64(accumulator) } as usize + id_acc;
-            debug!("sum: {:}", sum);
+            debug!("sum: {:}", accumulator);
             // let sum = 0;
-            Ok(sum)
+            Ok(accumulator as usize)
         } else {
             Ok(0)
         }
     }
-
     // #[inline]
     // fn process_dense_bucket(&self, indices: &[Option<u32>], distris: &[Option<u64>], min_range: u64, boundary_idx: usize, valid_num: usize) -> Result<Vec<Option<Vec<Chunk>>>> {
     //     let mut batches: Vec<Option<Vec<Chunk>>> = vec![None; indices.len()];
@@ -532,11 +654,9 @@ impl PostingBatchBuilder {
         
         let mut id_num: usize = 0;
         let mut bitmap_num: usize = 0;
-        let mut doc_num: usize = 0;
+        let term_num: usize = term_dict.len();
         let mut binary_num: usize = 0;
         for (i, (k, v)) in term_dict.into_iter().enumerate() {
-                doc_num += v.len();
-
                 let mut boundary = vec![0];
                 let mut cnter = 0;
                 let mut builder_len = 0;
@@ -544,19 +664,26 @@ impl PostingBatchBuilder {
                 if idx.is_some() {
                     idx.as_ref().unwrap().borrow_mut().get_mut(&k).unwrap().add_idx(i as u32, partition_num);
                 }
-                let mut freq: Vec<Option<Vec<Option<u8>>>> = vec![None; 4];
                 let mut binary_buffer: Vec<Vec<u8>> = Vec::new();
                 let mut buffer: Vec<u16> = Vec::with_capacity(512);
+                let mut freq_buffer: Vec<u8> = Vec::with_capacity(512);
+                let mut freqs_vec: Vec<Vec<u8>> = Vec::new();
+
                 let mut byte_num = 0;
+                let mut freq_num = 0;
                 v.into_iter()
                 .for_each(|(p, f)| {
                     if p - cnter < 512 {
                         buffer.push((p - cnter) as u16);
+                        freq_buffer.push(f);
+                        freq_num += 1;
                     } else {
                         let skip_num = (p - cnter) / 512;
                         cnter += skip_num * 512;
                         batch_num += 1;
-                        
+                        // for _ in 0..skip_num {
+                        //     boundary.push(builder_len);
+                        // }
                         boundary.push(builder_len);
                         if buffer.len() > 32 {
                             bitmap_num += 1;
@@ -580,17 +707,14 @@ impl PostingBatchBuilder {
                         }
                         buffer.clear();
                         buffer.push((p - cnter) as u16);
+
+                        freqs_vec.push(freq_buffer.drain(..).collect());
+                        freq_buffer.clear();
+                        freq_buffer.push(f % 8);
+                        freq_num += 1;
                     }
 
-                    let idx=  f / 64 % 8;
-                    match freq[idx as usize] {
-                        Some(ref mut v) => {
-                            v.push(Some(f));
-                        }
-                        None => {
-                            freq[idx as usize] = Some(vec![Some(f)]);
-                        }
-                    }
+                    
                 });
 
                 if buffer.len() > 0 {
@@ -610,8 +734,14 @@ impl PostingBatchBuilder {
                             value.1.to_vec()
                         });
                     }
+                    freqs_vec.push(freq_buffer);
                 }
-                freqs.push(Arc::new(GenericListArray::<i32>::from_iter_primitive::<UInt8Type, _, _>(freq)));
+                let mut freqs_builder = GenericBinaryBuilder::with_capacity(freqs_vec.len(), freq_num);
+                for freq in freqs_vec {
+                    freqs_builder.append_value(freq);
+                }
+                freqs.push(Arc::new(freqs_builder.finish()));
+
                 binary_num += binary_buffer.len();
                 let mut posting_builder = GenericBinaryBuilder::with_capacity(binary_buffer.len(), byte_num);
                 for batch in binary_buffer {
@@ -625,7 +755,7 @@ impl PostingBatchBuilder {
         }
         info!("id list size: {:}", id_num);
         info!("bitmap size: {:}", bitmap_num);
-        info!("doc num: {:}", doc_num);
+        info!("term num: {:}", term_num);
         info!("binary len: {:}", binary_num);
         schema_list.push(Field::new("__id__", DataType::UInt32, false));
         postings.push(Arc::new(PostingList::from(vec![] as Vec<&[u8]>)));

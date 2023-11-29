@@ -41,6 +41,7 @@ impl PostingHandler {
             .map(|p| parse_wiki_dir(&(base.clone() + &p)).unwrap())
             .flatten()
             .collect();
+
         let doc_len = items.len();
         let mut ids: Vec<u32> = Vec::new();
         let mut words: Vec<String> = Vec::new();
@@ -58,6 +59,8 @@ impl PostingHandler {
             });
             cnt += 1;
         });
+
+        info!("word num: {:}", words.len());
 
         let mut rng = thread_rng();
         let test_case = words.iter()
@@ -180,7 +183,7 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, _partition_nums: u
     // let num_512_partition = (num_512 + partition_nums as u32 - 1) / (partition_nums as u32);
     let num_512_partition = num_512 + partition_nums as u32 - 1;
 
-    info!("num_512: {}, num_512_partition: {}", num_512, num_512_partition);
+    debug!("num_512: {}, num_512_partition: {}", num_512, num_512_partition);
     let mut partition_batch = Vec::new();
     let mut term_idx: BTreeMap<String, TermMetaBuilder> = BTreeMap::new();
     for _ in 0..partition_nums {
@@ -200,9 +203,9 @@ fn to_batch(ids: Vec<u32>, words: Vec<String>, length: usize, _partition_nums: u
                 if id >= (batch_size * num_512_partition * (current.0 as u32 + 1)) {
                     current.0 += 1;
                     current.1 = 0;
-                    info!("Start build ({}, {}) batch, current thredhold: {}", current.0, current.1, thredhold);
+                    debug!("Start build ({}, {}) batch, current thredhold: {}", current.0, current.1, thredhold);
                 } else {
-                    info!("Thredhold: {}, current: {:?}", thredhold, current);
+                    debug!("Thredhold: {}, current: {:?}", thredhold, current);
                     current.1 += 1;
                 }
                 thredhold += batch_size;
